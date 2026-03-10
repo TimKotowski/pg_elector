@@ -1,3 +1,3 @@
-# pg_elector is a simple leader election built uisng postgrees MVCC
+# pg_elector is a simple leader election
 
 pg_elector is a simple leader election backed by PostgreSQL. In distributed systems, certain workloads require a single-leader guarantee. Only one instance should be actively doing work at any given time. Without this, you risk split brain scenarios where multiple instances believe they're the leader, leading to duplicate processing, data corruption, or ordering violations. This applies anywhere you have multiple instances and one needs to own a responsibility, Kubernetes Deployments, StatefulSets, VM-based deployments, autoscaled cloud instances, or plain old processes on separate hosts. The infrastructure differs, the problem doesn't. If you're already running PostgreSQL, pg_elector gives you leader election using PostgreSQL MVCC. One leader, N standbys, zero additional infrastructure.
