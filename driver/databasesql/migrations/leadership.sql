@@ -1,12 +1,11 @@
-CREATE TABLE IF NOT EXISTS pg_leader (
-    name TEXT NOT NULL DEFAULT 'pg_elector',
-    namespace TEXT NOT NULL DEFAULT 'default',
-    node_id TEXT NOT NULL,
-    term INT NOT NULL,
-    heartbeat TIMESTAMPTZ NOT NULL,
+CREATE TABLE IF NOT EXISTS leaders (
+    elected_at TIMESTAMPTZ NOT NULL,        -- 8 bytes
+    expires_at TIMESTAMPTZ NOT NULL,        -- 8 bytes
+
+    -- variance
+    name TEXT NOT NULL DEFAULT 'default',
+    leader_id TEXT NOT NULL,
 
     PRIMARY KEY (name),
-    CONSTRAINT node_id_unique_idx UNIQUE node_id
+    CONSTRAINT unique_node_id UNIQUE (node_id)
 );
-
-CREATE INDEX heartbeat_check_idx on pg_leader(name, heartbeat)
