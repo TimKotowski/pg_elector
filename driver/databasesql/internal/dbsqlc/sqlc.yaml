@@ -1,0 +1,21 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    queries:
+      - ../../../pgxv5/internal/dbsqlc/query/query.sql
+    schema:
+      - ../../../pgxv5/internal/dbsqlc/schema/schema.sql
+    gen:
+      go:
+        package: "dbsqlc"
+        sql_package: "database/sql"
+        out: "."
+        emit_methods_with_db_argument: true
+        emit_exact_table_names: true
+        emit_params_struct_pointers: true
+        emit_result_struct_pointers: true
+
+        overrides:
+          - db_type: "timestamptz"
+            nullable: false
+            go_type: "time.Time"
