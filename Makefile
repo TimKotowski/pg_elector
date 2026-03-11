@@ -18,3 +18,7 @@ coverage:
 
 go-version:
 	@go version
+
+sqlc-generate:
+	cd driver/pgxv5/internal/dbsqlc && sqlc generate
+	cd driver/databasesql/internal/dbsqlc && sqlc generate

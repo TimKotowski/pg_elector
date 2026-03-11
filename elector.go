@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/TimKotowski/pg_elector/driver"
 )
 
 type State string
@@ -28,7 +30,7 @@ type Elector struct {
 
 	state State
 
-	client *Client
+	driver driver.Driver
 
 	config *Config
 
@@ -41,7 +43,7 @@ type LeaderCallback struct {
 	OnNewLeader      func(nodeId string)
 }
 
-func NewLeaderElector(ctx context.Context, client *Client, config *Config) (*Elector, error) {
+func NewLeaderElector(ctx context.Context, driver driver.Driver, config *Config) (*Elector, error) {
 	nodeId, err := getNodeId()
 	if err != nil {
 		return nil, err
@@ -55,7 +57,7 @@ func NewLeaderElector(ctx context.Context, client *Client, config *Config) (*Ele
 			OnStartedLeading: func() { return },
 			OnNewLeader:      func(nodeId string) { return },
 		},
-		client: client,
+		driver: driver,
 		config: config,
 		state:  FOLLOWER,
 		mutex:  sync.Mutex{},
