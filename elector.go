@@ -128,7 +128,7 @@ func (e *Elector) runBlockingLeadershipLoop(ctx context.Context) {
 
 		select {
 		case <-deadlineTimer.C:
-			renewalTimer.Stop()
+			stop()
 			return
 
 		case <-renewalTimer.C:
@@ -138,8 +138,7 @@ func (e *Elector) runBlockingLeadershipLoop(ctx context.Context) {
 			cancel()
 
 			if err != nil || renewal == 0 {
-				renewalTimer.Stop()
-				deadlineTimer.Stop()
+				stop()
 				return
 			}
 			log.Printf("nodeId %v renew", e.nodeId)
