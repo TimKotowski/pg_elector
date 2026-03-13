@@ -2,7 +2,6 @@ package pg_elector
 
 import (
 	"context"
-	"log"
 	"math/rand"
 	"os"
 	"strings"
@@ -76,6 +75,7 @@ func (e *Elector) Start(ctx context.Context) error {
 		}
 
 		if leader {
+			e.changeState(LEADER)
 			e.runBlockingLeadershipLoop(ctx)
 		}
 
@@ -106,20 +106,19 @@ func (e *Elector) attemptToAcquireLeadership() (bool, error) {
 }
 
 func (e *Elector) runBlockingLeadershipLoop(ctx context.Context) {
-	log.Printf("start leadership loop for %v", e.nodeId)
-
 	renewalTimer := time.NewTicker(e.config.ElectionClock.LeadRetryPeriod)
 	deadlineTimer := time.NewTimer(e.config.ElectionClock.LeaderDeadline)
-	stop := func() {
+	handOffLeadershipLoss := func() {
+		e.changeState(FOLLOWER)
 		renewalTimer.Stop()
 		deadlineTimer.Stop()
 	}
+	defer handOffLeadershipLoss()
 
 	for {
 		if e.config.ReleaseOnCancel {
 			select {
 			case <-ctx.Done():
-				stop()
 				return
 			default:
 			}
@@ -129,21 +128,18 @@ func (e *Elector) runBlockingLeadershipLoop(ctx context.Context) {
 		case <-renewalTimer.C:
 			renewal, err := e.driver.GetQuerier().LeaderRenewal(context.Background(), driver.LeaderRenewalParams{LeaderId: e.nodeId})
 			if err != nil || renewal == NO_ROW_AFFECTED {
-				stop()
 				return
 			}
 
 			if !deadlineTimer.Stop() {
 				select {
 				case <-deadlineTimer.C:
-					stop()
 					return
 				default:
 				}
 			}
 
 			deadlineTimer.Reset(e.config.ElectionClock.LeaderDeadline)
-			log.Printf("nodeId %v renewed", e.nodeId)
 		}
 	}
 }

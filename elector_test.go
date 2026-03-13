@@ -2,6 +2,7 @@ package pg_elector
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,7 +21,7 @@ func TestElector(t *testing.T) {
 		elector, err := NewLeaderElector(t.Context(), driver, &Config{
 			ElectionClock: ElectionClock{
 				LeaderDeadline:         time.Second * 1,
-				LeadRetryPeriod:        time.Millisecond * 500,
+				LeadRetryPeriod:        time.Millisecond * 100,
 				ElectionInterval:       time.Second * 2,
 				ElectionJitterInterval: time.Millisecond * 10,
 			},
@@ -36,11 +37,23 @@ func TestElector(t *testing.T) {
 		querier.EXPECT().LeaderRenewal(gomock.Any(), gomock.Any()).AnyTimes().Return(int64(1), nil)
 
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second*4)
-		err = elector.Start(ctx)
-		cancel()
+		wg := &sync.WaitGroup{}
+		wg.Add(1)
+		go func(wg *sync.WaitGroup) {
+			defer wg.Done()
+			err := elector.Start(ctx)
+			cancel()
+			assert.ErrorIs(t, err, context.DeadlineExceeded)
+		}(wg)
 
 		assert.Eventually(t, func() bool {
-			return assert.ErrorIs(t, err, context.DeadlineExceeded)
+			return elector.isLeader()
+		}, time.Second*3, time.Millisecond*5)
+
+		wg.Wait()
+
+		assert.Eventually(t, func() bool {
+			return elector.isFollower()
 		}, time.Second, time.Millisecond*10)
 	})
 }
