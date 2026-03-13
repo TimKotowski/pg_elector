@@ -32,10 +32,5 @@ func (q *Querier) AcquireLeadership(ctx context.Context, param driver.AcquireLea
 
 func (q *Querier) LeaderRenewal(ctx context.Context, param driver.LeaderRenewalParams) (int64, error) {
 	// do query
-	select {
-	case <-ctx.Done():
-		return 0, ctx.Err()
-	default:
-	}
 	return 0, nil
 }

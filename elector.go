@@ -14,13 +14,13 @@ import (
 
 type State string
 
+const (
+	NO_ROW_AFFECTED = 0
+)
+
 var (
 	LEADER   State = "leader"
 	FOLLOWER State = "follower"
-)
-
-const (
-	leaseDurationPadding = time.Second * 10
 )
 
 type Elector struct {
@@ -79,9 +79,6 @@ func (e *Elector) Start(ctx context.Context) error {
 			e.runBlockingLeadershipLoop(ctx)
 		}
 
-		jitter := JitterDuration(e.config.ElectionClock.ElectionJitterInterval)
-		electionTimer.Reset(e.config.ElectionClock.ElectionInterval + jitter)
-
 		if e.config.ReleaseOnCancel {
 			select {
 			case <-ctx.Done():
@@ -90,6 +87,8 @@ func (e *Elector) Start(ctx context.Context) error {
 			}
 		}
 
+		jitter := JitterDuration(e.config.ElectionClock.ElectionJitterInterval)
+		electionTimer.Reset(e.config.ElectionClock.ElectionInterval + jitter)
 		select {
 		case <-electionTimer.C:
 		}
@@ -127,23 +126,24 @@ func (e *Elector) runBlockingLeadershipLoop(ctx context.Context) {
 		}
 
 		select {
-		case <-deadlineTimer.C:
-			stop()
-			return
-
 		case <-renewalTimer.C:
-			timeoutCtx, cancel := context.WithTimeout(context.Background(), e.config.ElectionClock.LeaderDeadline)
-
-			renewal, err := e.driver.GetQuerier().LeaderRenewal(timeoutCtx, driver.LeaderRenewalParams{LeaderId: e.nodeId})
-			cancel()
-
-			if err != nil || renewal == 0 {
+			renewal, err := e.driver.GetQuerier().LeaderRenewal(context.Background(), driver.LeaderRenewalParams{LeaderId: e.nodeId})
+			if err != nil || renewal == NO_ROW_AFFECTED {
 				stop()
 				return
 			}
-			log.Printf("nodeId %v renew", e.nodeId)
+
+			if !deadlineTimer.Stop() {
+				select {
+				case <-deadlineTimer.C:
+					stop()
+					return
+				default:
+				}
+			}
 
 			deadlineTimer.Reset(e.config.ElectionClock.LeaderDeadline)
+			log.Printf("nodeId %v renewed", e.nodeId)
 		}
 	}
 }
@@ -163,7 +163,19 @@ func (e *Elector) changeState(state State) {
 }
 
 func (e *Elector) leaseDuration() time.Duration {
-	return e.config.ElectionClock.ElectionInterval + leaseDurationPadding
+	electionIntervalMs := e.config.ElectionClock.ElectionInterval.Milliseconds()
+	padding := time.Duration(float64(electionIntervalMs) * 0.5)
+
+	if padding < time.Second*10 {
+		padding = time.Second * 10
+	}
+
+	if padding > time.Minute*2 {
+		// Set a lower ratio if the padding is over 2 minutes.
+		padding = time.Duration(float64(electionIntervalMs) * 0.2)
+	}
+
+	return e.config.ElectionClock.ElectionInterval + padding
 }
 
 func JitterDuration(d time.Duration) time.Duration {
