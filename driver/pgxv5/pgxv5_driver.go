@@ -26,8 +26,11 @@ func (d *Driver) GetQuerier() driver.Querier {
 	return &Querier{driver: d}
 }
 
-func (q *Querier) AcquireLeadership(ctx context.Context) {
+func (q *Querier) AcquireLeadership(ctx context.Context, param driver.AcquireLeadershipParams) (bool, error) {
+	return true, nil
 }
 
-func (q *Querier) LeaderRenewal(ctx context.Context) {
+func (q *Querier) LeaderRenewal(ctx context.Context, param driver.LeaderRenewalParams) (int64, error) {
+	// do query
+	return 0, nil
 }

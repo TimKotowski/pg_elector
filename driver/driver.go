@@ -7,8 +7,8 @@ type Driver interface {
 }
 
 type Querier interface {
-	AcquireLeadership(ctx context.Context)
-	LeaderRenewal(ctx context.Context)
+	AcquireLeadership(ctx context.Context, param AcquireLeadershipParams) (bool, error)
+	LeaderRenewal(ctx context.Context, param LeaderRenewalParams) (int64, error)
 }
 
 type BasePrams struct {

@@ -2,6 +2,7 @@ package pg_elector
 
 import (
 	"context"
+	"math/rand"
 	"os"
 	"strings"
 	"sync"
@@ -12,13 +13,13 @@ import (
 
 type State string
 
+const (
+	NO_ROW_AFFECTED = 0
+)
+
 var (
 	LEADER   State = "leader"
 	FOLLOWER State = "follower"
-)
-
-const (
-	leaseDurationPadding = time.Second * 10
 )
 
 type Elector struct {
@@ -64,8 +65,83 @@ func NewLeaderElector(ctx context.Context, driver driver.Driver, config *Config)
 	}, nil
 }
 
-func (e *Elector) Start() error {
-	return nil
+func (e *Elector) Start(ctx context.Context) error {
+	electionTimer := time.NewTimer(0)
+
+	for {
+		leader, err := e.attemptToAcquireLeadership()
+		if err != nil {
+			return err
+		}
+
+		if leader {
+			e.changeState(LEADER)
+			e.runBlockingLeadershipLoop(ctx)
+		}
+
+		if e.config.ReleaseOnCancel {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+		}
+
+		jitter := JitterDuration(e.config.ElectionClock.ElectionJitterInterval)
+		electionTimer.Reset(e.config.ElectionClock.ElectionInterval + jitter)
+		select {
+		case <-electionTimer.C:
+		}
+	}
+}
+
+func (e *Elector) attemptToAcquireLeadership() (bool, error) {
+	return e.driver.GetQuerier().AcquireLeadership(context.Background(), driver.AcquireLeadershipParams{
+		BasePrams: driver.BasePrams{
+			Name:     e.config.Name,
+			LeaderId: e.nodeId,
+		},
+		LeseDuration: e.leaseDuration().Seconds(),
+	})
+}
+
+func (e *Elector) runBlockingLeadershipLoop(ctx context.Context) {
+	renewalTimer := time.NewTicker(e.config.ElectionClock.LeadRetryPeriod)
+	deadlineTimer := time.NewTimer(e.config.ElectionClock.LeaderDeadline)
+	handOffLeadershipLoss := func() {
+		e.changeState(FOLLOWER)
+		renewalTimer.Stop()
+		deadlineTimer.Stop()
+	}
+	defer handOffLeadershipLoss()
+
+	for {
+		if e.config.ReleaseOnCancel {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+		}
+
+		select {
+		case <-renewalTimer.C:
+			renewal, err := e.driver.GetQuerier().LeaderRenewal(context.Background(), driver.LeaderRenewalParams{LeaderId: e.nodeId})
+			if err != nil || renewal == NO_ROW_AFFECTED {
+				return
+			}
+
+			if !deadlineTimer.Stop() {
+				select {
+				case <-deadlineTimer.C:
+					return
+				default:
+				}
+			}
+
+			deadlineTimer.Reset(e.config.ElectionClock.LeaderDeadline)
+		}
+	}
 }
 
 func (e *Elector) isLeader() bool {
@@ -83,7 +159,25 @@ func (e *Elector) changeState(state State) {
 }
 
 func (e *Elector) leaseDuration() time.Duration {
-	return e.config.ElectionClock.ElectionInterval + leaseDurationPadding
+	electionIntervalMs := e.config.ElectionClock.ElectionInterval.Milliseconds()
+	padding := time.Duration(float64(electionIntervalMs) * 0.5)
+
+	if padding < time.Second*10 {
+		padding = time.Second * 10
+	}
+
+	if padding > time.Minute*2 {
+		// Set a lower ratio if the padding is over 2 minutes.
+		padding = time.Duration(float64(electionIntervalMs) * 0.2)
+	}
+
+	return e.config.ElectionClock.ElectionInterval + padding
+}
+
+func JitterDuration(d time.Duration) time.Duration {
+	// [0.5-1.1]
+	jitter := 0.5 + rand.Float64()*0.6
+	return time.Duration(float64(d) * jitter)
 }
 
 func getNodeId() (string, error) {
@@ -93,13 +187,15 @@ func getNodeId() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if host == "" {
+		host = "default_host"
+	}
 
 	if len(host) > maxHostLength {
 		host = host[0:maxHostLength]
 	}
 
-	// Allow double clicks, for logging and debugging to be easier.
-	nodeId := strings.ReplaceAll(host, ".", "_")
+	nodeId := strings.NewReplacer(".", "_", "-", "_").Replace(host)
 
-	return nodeId, nil
+	return nodeId + "_" + strings.ReplaceAll(time.Now().UTC().Format("2006_01_02T15_04_05Z07.00000"), ".", "_"), nil
 }
