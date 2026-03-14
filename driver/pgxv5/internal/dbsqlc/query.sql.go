@@ -54,3 +54,18 @@ func (q *Queries) LeaderRenewal(ctx context.Context, db DBTX, arg *LeaderRenewal
 	}
 	return result.RowsAffected(), nil
 }
+
+const releaseLeadership = `-- name: ReleaseLeadership :exec
+DELETE FROM leaders
+WHERE name = $1 AND leader_id = $2
+`
+
+type ReleaseLeadershipParams struct {
+	Name     string
+	Leaderid string
+}
+
+func (q *Queries) ReleaseLeadership(ctx context.Context, db DBTX, arg *ReleaseLeadershipParams) error {
+	_, err := db.Exec(ctx, releaseLeadership, arg.Name, arg.Leaderid)
+	return err
+}

@@ -48,7 +48,6 @@ func TestElector(t *testing.T) {
 		assert.Eventually(t, func() bool {
 			return elector.isLeader()
 		}, time.Second*3, time.Millisecond*5)
-
 		wg.Wait()
 
 		assert.True(t, elector.isFollower())
