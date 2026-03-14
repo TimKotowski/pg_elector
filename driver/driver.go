@@ -9,6 +9,7 @@ type Driver interface {
 type Querier interface {
 	AcquireLeadership(ctx context.Context, param AcquireLeadershipParams) (bool, error)
 	LeaderRenewal(ctx context.Context, param LeaderRenewalParams) (int64, error)
+	ReleaseLeadership(ctx context.Context, param BasePrams) error
 }
 
 type BasePrams struct {
@@ -18,10 +19,10 @@ type BasePrams struct {
 
 type AcquireLeadershipParams struct {
 	BasePrams
-	LeseDuration float64
+	LeaseDuration float64
 }
 
 type LeaderRenewalParams struct {
 	BasePrams
-	LeaderId string
+	LeseDuration float64
 }

@@ -108,3 +108,17 @@ func (mr *MockQuerierMockRecorder) LeaderRenewal(ctx, param any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LeaderRenewal", reflect.TypeOf((*MockQuerier)(nil).LeaderRenewal), ctx, param)
 }
+
+// ReleaseLeadership mocks base method.
+func (m *MockQuerier) ReleaseLeadership(ctx context.Context, param driver.BasePrams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReleaseLeadership", ctx, param)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ReleaseLeadership indicates an expected call of ReleaseLeadership.
+func (mr *MockQuerierMockRecorder) ReleaseLeadership(ctx, param any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReleaseLeadership", reflect.TypeOf((*MockQuerier)(nil).ReleaseLeadership), ctx, param)
+}

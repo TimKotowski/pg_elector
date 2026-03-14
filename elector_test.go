@@ -13,30 +13,29 @@ import (
 )
 
 func TestElector(t *testing.T) {
-	t.Run("elector obtains leadership, then releases on cancel from ctx deadline", func(t *testing.T) {
+	t.Run("when ReleaseOnCancel is true, leader node revoked leadership immediately on context cancel", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		driver := mockDriver.NewMockDriver(ctrl)
 		querier := mockDriver.NewMockQuerier(ctrl)
 
-		elector, err := NewLeaderElector(t.Context(), driver, &Config{
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+		elector, err := NewLeaderElector(ctx, driver, &Config{
 			ElectionClock: ElectionClock{
 				LeaderDeadline:         time.Second * 1,
-				LeadRetryPeriod:        time.Millisecond * 100,
+				LeadRetryPeriod:        time.Millisecond * 400,
 				ElectionInterval:       time.Second * 2,
-				ElectionJitterInterval: time.Millisecond * 10,
+				ElectionJitterInterval: time.Millisecond * 80,
 			},
 			Name:            "default",
 			ReleaseOnCancel: true,
 		})
-		if err != nil {
-			return
-		}
+		assert.NoError(t, err)
 
 		driver.EXPECT().GetQuerier().AnyTimes().Return(querier)
 		querier.EXPECT().AcquireLeadership(gomock.Any(), gomock.Any()).Return(true, nil)
 		querier.EXPECT().LeaderRenewal(gomock.Any(), gomock.Any()).AnyTimes().Return(int64(1), nil)
+		querier.EXPECT().ReleaseLeadership(gomock.Any(), gomock.Any()).AnyTimes().Return(nil)
 
-		ctx, cancel := context.WithTimeout(t.Context(), time.Second*4)
 		wg := &sync.WaitGroup{}
 		wg.Add(1)
 		go func(wg *sync.WaitGroup) {
@@ -49,11 +48,32 @@ func TestElector(t *testing.T) {
 		assert.Eventually(t, func() bool {
 			return elector.isLeader()
 		}, time.Second*3, time.Millisecond*5)
-
 		wg.Wait()
 
-		assert.Eventually(t, func() bool {
-			return elector.isFollower()
-		}, time.Second, time.Millisecond*10)
+		assert.True(t, elector.isFollower())
 	})
+
+	t.Run("when ReleaseOnCancel is false, leadership is naturally released by waiting for lease duration to expire", func(t *testing.T) {})
+	t.Run("successful renewals keep leader beyond initial deadline window", func(t *testing.T) {})
+	t.Run("leader steps down when renewal returns zero rows affects", func(t *testing.T) {})
+	t.Run("leader wont step down right away, when renewal returns an error", func(t *testing.T) {})
+	t.Run("leader steps down when deadline timer fires before renewal completes", func(t *testing.T) {})
+
+	t.Run("multiple nodes spawn, with at most once, leadership acquired", func(t *testing.T) {})
+	t.Run("leader nodes looses leadership after deadline passes", func(t *testing.T) {})
+	t.Run("when leader losses leadership, a new node takes leadership", func(t *testing.T) {})
+	t.Run("when the database layer fails, for leader allow continuing election process till max attempts reached", func(t *testing.T) {})
+	t.Run("when the database layer fails, for followers allow continuing election process till max attempts reached", func(t *testing.T) {})
+
+	t.Run("follower retries acquiring leader after failed attempt without crashing", func(t *testing.T) {})
+	t.Run("follower remains follower when acquire returns false with no error", func(t *testing.T) {})
+
+	t.Run("node starts in follower state before any election attempt", func(t *testing.T) {})
+	t.Run("node transitions back to follower after losing leadership then can re-acquire", func(t *testing.T) {})
+
+	t.Run("leaseDuration returns interval plus 50 percent padding for short intervals", func(t *testing.T) {})
+	t.Run("leaseDuration clamps padding to minimum 10 seconds", func(t *testing.T) {})
+	t.Run("leaseDuration reduces padding ratio when padding exceeds 2 minutes", func(t *testing.T) {})
+
+	t.Run("JitterDuration output is always within 0.5x to 1.1x of input", func(t *testing.T) {})
 }
