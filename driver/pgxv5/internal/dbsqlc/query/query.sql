@@ -13,3 +13,7 @@ UPDATE leaders
 SET renewed_at = NOW(),
     expires_at = NOW() + MAKE_INTERVAL(secs => @leaseDuration)
 WHERE name = @name AND leader_id = @leaderId;
+
+-- name: ReleaseLeadership :execrows
+DELETE FROM leaders
+WHERE name = @name AND leader_id = @leaderId;

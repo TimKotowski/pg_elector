@@ -24,6 +24,13 @@ type Config struct {
 	// Defaults to "default".
 	Name string
 
+	// ReleaseOnCancel set to true if on cancel of context, the leaderships lock should be released immediately.
+	// You must ensure though, that all code actions are handled before wanting to cancel leadership immediately.
+	// Once released, the elector process will gracefully shut down.
+
+	// ReleaseOnCancel set to false, if on cancel of context. Will let the leadership expire naturally before gracefully shutting down.
+
+	// Defaults to false.
 	ReleaseOnCancel bool
 }
 

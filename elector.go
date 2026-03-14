@@ -2,6 +2,7 @@ package pg_elector
 
 import (
 	"context"
+	"log"
 	"math/rand"
 	"os"
 	"strings"
@@ -36,6 +37,8 @@ type Elector struct {
 	config *Config
 
 	mutex sync.Mutex
+
+	contextWatcher *ContextWatcher
 }
 
 type LeaderCallback struct {
@@ -44,13 +47,22 @@ type LeaderCallback struct {
 	OnNewLeader      func(nodeId string)
 }
 
-func NewLeaderElector(ctx context.Context, driver driver.Driver, config *Config) (*Elector, error) {
+func NewLeaderElector(ctx context.Context, d driver.Driver, config *Config) (*Elector, error) {
 	nodeId, err := getNodeId()
 	if err != nil {
 		return nil, err
 	}
+	handler := func() {
+		err := d.GetQuerier().ReleaseLeadership(context.Background(), driver.BasePrams{
+			Name:     config.Name,
+			LeaderId: nodeId,
+		})
+		if err != nil {
+			log.Println("Unable to release leadership gracefully", err)
+		}
+	}
 
-	return &Elector{
+	elector := &Elector{
 		ctx:    ctx,
 		nodeId: nodeId,
 		leaderCallback: LeaderCallback{
@@ -58,20 +70,30 @@ func NewLeaderElector(ctx context.Context, driver driver.Driver, config *Config)
 			OnStartedLeading: func() { return },
 			OnNewLeader:      func(nodeId string) { return },
 		},
-		driver: driver,
+		driver: d,
 		config: config,
 		state:  FOLLOWER,
 		mutex:  sync.Mutex{},
-	}, nil
+	}
+
+	if config.ReleaseOnCancel {
+		elector.contextWatcher = NewContextWatcher(handler, ctx)
+	}
+
+	return elector, nil
 }
 
 func (e *Elector) Start(ctx context.Context) error {
-	electionTimer := time.NewTimer(0)
+	if e.config.ReleaseOnCancel {
+		e.contextWatcher.Watch()
+	}
 
+	electionTimer := time.NewTimer(0)
 	for {
 		leader, err := e.attemptToAcquireLeadership()
 		if err != nil {
-			return err
+			// TODO: Swallow error for now. Improve later.
+			continue
 		}
 
 		if leader {
@@ -79,17 +101,11 @@ func (e *Elector) Start(ctx context.Context) error {
 			e.runBlockingLeadershipLoop(ctx)
 		}
 
-		if e.config.ReleaseOnCancel {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-		}
-
 		jitter := JitterDuration(e.config.ElectionClock.ElectionJitterInterval)
 		electionTimer.Reset(e.config.ElectionClock.ElectionInterval + jitter)
 		select {
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-electionTimer.C:
 		}
 	}
@@ -113,20 +129,20 @@ func (e *Elector) runBlockingLeadershipLoop(ctx context.Context) {
 		renewalTimer.Stop()
 		deadlineTimer.Stop()
 	}
+
 	defer handOffLeadershipLoss()
-
 	for {
-		if e.config.ReleaseOnCancel {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-		}
-
 		select {
 		case <-renewalTimer.C:
-			renewal, err := e.driver.GetQuerier().LeaderRenewal(context.Background(), driver.LeaderRenewalParams{LeaderId: e.nodeId})
+			ctxTimeout, cancel := context.WithTimeout(ctx, e.config.ElectionClock.LeaderDeadline)
+			renewal, err := e.driver.GetQuerier().LeaderRenewal(ctxTimeout, driver.LeaderRenewalParams{
+				BasePrams: driver.BasePrams{
+					Name:     e.nodeId,
+					LeaderId: e.nodeId,
+				},
+				LeseDuration: e.leaseDuration().Seconds(),
+			})
+			cancel()
 			if err != nil || renewal == NO_ROW_AFFECTED {
 				return
 			}
@@ -138,8 +154,16 @@ func (e *Elector) runBlockingLeadershipLoop(ctx context.Context) {
 				default:
 				}
 			}
-
 			deadlineTimer.Reset(e.config.ElectionClock.LeaderDeadline)
+
+		case <-deadlineTimer.C:
+			return
+
+		case <-ctx.Done():
+			if e.config.ReleaseOnCancel {
+				<-e.contextWatcher.Release()
+			}
+			return
 		}
 	}
 }
@@ -159,7 +183,7 @@ func (e *Elector) changeState(state State) {
 }
 
 func (e *Elector) leaseDuration() time.Duration {
-	electionIntervalMs := e.config.ElectionClock.ElectionInterval.Milliseconds()
+	electionIntervalMs := e.config.ElectionClock.ElectionInterval
 	padding := time.Duration(float64(electionIntervalMs) * 0.5)
 
 	if padding < time.Second*10 {
