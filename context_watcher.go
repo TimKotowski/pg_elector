@@ -1,6 +1,8 @@
 package pg_elector
 
-import "context"
+import (
+	"context"
+)
 
 type Handler func()
 
@@ -27,10 +29,7 @@ func (c *ContextWatcher) Release() <-chan struct{} {
 }
 
 func (c *ContextWatcher) watch() {
-	select {
-	case <-c.ctx.Done():
-		c.handleCancel()
-		c.release <- struct{}{}
-		return
-	}
+	<-c.ctx.Done()
+	c.handleCancel()
+	c.release <- struct{}{}
 }

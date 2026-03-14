@@ -69,3 +69,21 @@ func NewConfig(opts ...ConfigFunc) *Config {
 
 	return conf
 }
+
+func WithElectionClock(clock ElectionClock) ConfigFunc {
+	return func(c *Config) {
+		c.ElectionClock = clock
+	}
+}
+
+func WithName(name string) ConfigFunc {
+	return func(c *Config) {
+		c.Name = name
+	}
+}
+
+func WithReleaseOnCancel(releaseOnCancel bool) ConfigFunc {
+	return func(c *Config) {
+		c.ReleaseOnCancel = releaseOnCancel
+	}
+}

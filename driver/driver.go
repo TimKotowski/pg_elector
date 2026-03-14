@@ -19,7 +19,7 @@ type BasePrams struct {
 
 type AcquireLeadershipParams struct {
 	BasePrams
-	LeseDuration float64
+	LeaseDuration float64
 }
 
 type LeaderRenewalParams struct {

@@ -111,14 +111,18 @@ func (e *Elector) Start(ctx context.Context) error {
 	}
 }
 
-func (e *Elector) attemptToAcquireLeadership() (bool, error) {
-	return e.driver.GetQuerier().AcquireLeadership(context.Background(), driver.AcquireLeadershipParams{
-		BasePrams: driver.BasePrams{
-			Name:     e.config.Name,
-			LeaderId: e.nodeId,
-		},
-		LeseDuration: e.leaseDuration().Seconds(),
-	})
+func (e *Elector) isLeader() bool {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+
+	return e.state == LEADER
+}
+
+func (e *Elector) isFollower() bool {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+
+	return e.state == FOLLOWER
 }
 
 func (e *Elector) runBlockingLeadershipLoop(ctx context.Context) {
@@ -135,16 +139,13 @@ func (e *Elector) runBlockingLeadershipLoop(ctx context.Context) {
 		select {
 		case <-renewalTimer.C:
 			ctxTimeout, cancel := context.WithTimeout(ctx, e.config.ElectionClock.LeaderDeadline)
-			renewal, err := e.driver.GetQuerier().LeaderRenewal(ctxTimeout, driver.LeaderRenewalParams{
-				BasePrams: driver.BasePrams{
-					Name:     e.nodeId,
-					LeaderId: e.nodeId,
-				},
-				LeseDuration: e.leaseDuration().Seconds(),
-			})
+			renewal, err := e.renewLeadership(ctxTimeout)
 			cancel()
-			if err != nil || renewal == NO_ROW_AFFECTED {
+			if renewal == NO_ROW_AFFECTED {
 				return
+			}
+			if err != nil {
+				continue
 			}
 
 			if !deadlineTimer.Stop() {
@@ -168,18 +169,31 @@ func (e *Elector) runBlockingLeadershipLoop(ctx context.Context) {
 	}
 }
 
-func (e *Elector) isLeader() bool {
-	return e.state == LEADER
+func (e *Elector) attemptToAcquireLeadership() (bool, error) {
+	return e.driver.GetQuerier().AcquireLeadership(context.Background(), driver.AcquireLeadershipParams{
+		BasePrams: driver.BasePrams{
+			Name:     e.config.Name,
+			LeaderId: e.nodeId,
+		},
+		LeaseDuration: e.leaseDuration().Seconds(),
+	})
 }
 
-func (e *Elector) isFollower() bool {
-	return e.state == FOLLOWER
+func (e *Elector) renewLeadership(ctx context.Context) (int64, error) {
+	return e.driver.GetQuerier().LeaderRenewal(ctx, driver.LeaderRenewalParams{
+		BasePrams: driver.BasePrams{
+			Name:     e.config.Name,
+			LeaderId: e.nodeId,
+		},
+		LeseDuration: e.leaseDuration().Seconds(),
+	})
 }
 
 func (e *Elector) changeState(state State) {
 	e.mutex.Lock()
+	defer e.mutex.Unlock()
+
 	e.state = state
-	e.mutex.Unlock()
 }
 
 func (e *Elector) leaseDuration() time.Duration {
