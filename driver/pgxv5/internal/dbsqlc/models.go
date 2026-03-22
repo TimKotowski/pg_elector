@@ -14,7 +14,6 @@ type Leaders struct {
 	ElectedAt time.Time
 	ExpiresAt time.Time
 	RenewedAt pgtype.Timestamptz
-	Term      int64
 	Name      string
 	LeaderID  string
 }

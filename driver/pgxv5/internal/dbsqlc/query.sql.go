@@ -9,15 +9,16 @@ import (
 	"context"
 )
 
-const acquireLeadership = `-- name: AcquireLeadership :execrows
+const acquireLeadership = `-- name: AcquireLeadership :one
 INSERT INTO leaders(name, leader_id, elected_at, expires_at)
-VALUES($1, $2, now(), MAKE_INTERVAL(secs => $3)) ON CONFLICT (name) DO UPDATE
+VALUES($1, $2, NOW(), NOW() + MAKE_INTERVAL(secs => $3))
+ON CONFLICT (name) DO UPDATE
 SET elected_at = NOW(),
     expires_at = NOW() + MAKE_INTERVAL(secs => $3),
-    renewed_at = NULL,
-    term = leaders.term + 1,
+    renewed_at = NOW(),
     leader_id = $2
 WHERE expires_at < NOW() AND name = $1
+RETURNING elected_at, expires_at, renewed_at, name, leader_id
 `
 
 type AcquireLeadershipParams struct {
@@ -26,19 +27,25 @@ type AcquireLeadershipParams struct {
 	Leaseduration float64
 }
 
-func (q *Queries) AcquireLeadership(ctx context.Context, db DBTX, arg *AcquireLeadershipParams) (int64, error) {
-	result, err := db.Exec(ctx, acquireLeadership, arg.Name, arg.Leaderid, arg.Leaseduration)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+func (q *Queries) AcquireLeadership(ctx context.Context, db DBTX, arg *AcquireLeadershipParams) (*Leaders, error) {
+	row := db.QueryRow(ctx, acquireLeadership, arg.Name, arg.Leaderid, arg.Leaseduration)
+	var i Leaders
+	err := row.Scan(
+		&i.ElectedAt,
+		&i.ExpiresAt,
+		&i.RenewedAt,
+		&i.Name,
+		&i.LeaderID,
+	)
+	return &i, err
 }
 
-const leaderRenewal = `-- name: LeaderRenewal :execrows
+const leaderRenewal = `-- name: LeaderRenewal :one
 UPDATE leaders
 SET renewed_at = NOW(),
     expires_at = NOW() + MAKE_INTERVAL(secs => $1)
-WHERE name = $2 AND leader_id = $3
+WHERE name = $2 AND leader_id = $3 and expires_at >= NOW()
+RETURNING elected_at, expires_at, renewed_at, name, leader_id
 `
 
 type LeaderRenewalParams struct {
@@ -47,10 +54,46 @@ type LeaderRenewalParams struct {
 	Leaderid      string
 }
 
-func (q *Queries) LeaderRenewal(ctx context.Context, db DBTX, arg *LeaderRenewalParams) (int64, error) {
-	result, err := db.Exec(ctx, leaderRenewal, arg.Leaseduration, arg.Name, arg.Leaderid)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+func (q *Queries) LeaderRenewal(ctx context.Context, db DBTX, arg *LeaderRenewalParams) (*Leaders, error) {
+	row := db.QueryRow(ctx, leaderRenewal, arg.Leaseduration, arg.Name, arg.Leaderid)
+	var i Leaders
+	err := row.Scan(
+		&i.ElectedAt,
+		&i.ExpiresAt,
+		&i.RenewedAt,
+		&i.Name,
+		&i.LeaderID,
+	)
+	return &i, err
+}
+
+const releaseLeadership = `-- name: ReleaseLeadership :exec
+DELETE FROM leaders
+WHERE name = $1 AND leader_id = $2
+`
+
+type ReleaseLeadershipParams struct {
+	Name     string
+	Leaderid string
+}
+
+func (q *Queries) ReleaseLeadership(ctx context.Context, db DBTX, arg *ReleaseLeadershipParams) error {
+	_, err := db.Exec(ctx, releaseLeadership, arg.Name, arg.Leaderid)
+	return err
+}
+
+const resignLeadership = `-- name: ResignLeadership :exec
+UPDATE leaders
+SET expires_at = NOW()
+WHERE name = $1 AND leader_id = $2
+`
+
+type ResignLeadershipParams struct {
+	Name     string
+	Leaderid string
+}
+
+func (q *Queries) ResignLeadership(ctx context.Context, db DBTX, arg *ResignLeadershipParams) error {
+	_, err := db.Exec(ctx, resignLeadership, arg.Name, arg.Leaderid)
+	return err
 }
