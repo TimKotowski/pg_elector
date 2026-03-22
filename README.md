@@ -4,3 +4,6 @@ pg_elector is a simple leader election backed by PostgreSQL. In distributed syst
 
 
 pg_elector due to non node consensus or fencing, this implementation like most, does not always guarantee one acting leader. This implementation does provide a very strong one acting leader, with fast acting resigning of stale leaders.
+
+
+Fencing is actively being explored and is feasible, though it would require the developer to query the client to check if term < newTerm. Today, pg_elector's callbacks help sidestep much of this issue, OnStartedLeader provides a context that is automatically cancelled once the client detects it is no longer the leader, triggering a resign. This goes a long way toward single leader safety along side work in internal implementation. However, for truly strong single leader guarantees, a fencing token approach would be needed. This would be exposed through the callback so the developer can incorporate it into their own work. For example, validating the term before starting or committing work. As long as the developer enforces that check on their side, this would provide a one acting leader guarantee.
