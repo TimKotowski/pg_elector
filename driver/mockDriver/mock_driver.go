@@ -80,10 +80,10 @@ func (m *MockQuerier) EXPECT() *MockQuerierMockRecorder {
 }
 
 // AcquireLeadership mocks base method.
-func (m *MockQuerier) AcquireLeadership(ctx context.Context, param driver.AcquireLeadershipParams) (bool, error) {
+func (m *MockQuerier) AcquireLeadership(ctx context.Context, param driver.AcquireLeadershipParams) (*driver.Leader, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "AcquireLeadership", ctx, param)
-	ret0, _ := ret[0].(bool)
+	ret0, _ := ret[0].(*driver.Leader)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -95,10 +95,10 @@ func (mr *MockQuerierMockRecorder) AcquireLeadership(ctx, param any) *gomock.Cal
 }
 
 // LeaderRenewal mocks base method.
-func (m *MockQuerier) LeaderRenewal(ctx context.Context, param driver.LeaderRenewalParams) (int64, error) {
+func (m *MockQuerier) LeaderRenewal(ctx context.Context, param driver.LeaderRenewalParams) (*driver.Leader, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "LeaderRenewal", ctx, param)
-	ret0, _ := ret[0].(int64)
+	ret0, _ := ret[0].(*driver.Leader)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -121,4 +121,18 @@ func (m *MockQuerier) ReleaseLeadership(ctx context.Context, param driver.BasePr
 func (mr *MockQuerierMockRecorder) ReleaseLeadership(ctx, param any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReleaseLeadership", reflect.TypeOf((*MockQuerier)(nil).ReleaseLeadership), ctx, param)
+}
+
+// ResignLeadership mocks base method.
+func (m *MockQuerier) ResignLeadership(ctx context.Context, param driver.BasePrams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ResignLeadership", ctx, param)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ResignLeadership indicates an expected call of ResignLeadership.
+func (mr *MockQuerierMockRecorder) ResignLeadership(ctx, param any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResignLeadership", reflect.TypeOf((*MockQuerier)(nil).ResignLeadership), ctx, param)
 }

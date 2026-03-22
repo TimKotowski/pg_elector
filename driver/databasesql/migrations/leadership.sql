@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS leaders (
     elected_at TIMESTAMPTZ NOT NULL,        -- 8 bytes
     expires_at TIMESTAMPTZ NOT NULL,        -- 8 bytes
-    renewed_at TIMESTAMPTZ,                 -- 8 bytes
+    renewed_at TIMESTAMPTZ NOT NULL,        -- 8 bytes
 
     -- variance
     name TEXT NOT NULL DEFAULT 'default',

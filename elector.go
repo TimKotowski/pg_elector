@@ -2,49 +2,37 @@ package pg_elector
 
 import (
 	"context"
+	"errors"
 	"log"
-	"math/rand"
-	"os"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/TimKotowski/pg_elector/driver"
 )
 
-type State string
-
-const (
-	NO_ROW_AFFECTED = 0
-)
-
-var (
-	LEADER   State = "leader"
-	FOLLOWER State = "follower"
-)
+var ErrRevokedLeader = errors.New("leadership was revoked")
+var ErrDeadlineReached = errors.New("leader deadline duration reached, unable to successfully renew lease")
 
 type Elector struct {
 	ctx context.Context
 
 	nodeId string
 
-	leaderCallback LeaderCallback
-
-	state State
-
 	driver driver.Driver
+
+	clock Clock
 
 	config *Config
 
 	mutex sync.Mutex
 
 	contextWatcher *ContextWatcher
-}
 
-type LeaderCallback struct {
-	OnStartedLeading func()
-	OnStoppedLeading func()
-	OnNewLeader      func(nodeId string)
+	maxRenewalErrAttempts int
+
+	leaderCallbackContextWatcher *ContextWatcher
+
+	leader *driver.Leader
 }
 
 func NewLeaderElector(ctx context.Context, d driver.Driver, config *Config) (*Elector, error) {
@@ -52,28 +40,42 @@ func NewLeaderElector(ctx context.Context, d driver.Driver, config *Config) (*El
 	if err != nil {
 		return nil, err
 	}
+
+	if d == nil {
+		return nil, errors.New("database driver was uninitialized")
+	}
+	if config == nil {
+		return nil, errors.New("config cannot be nil")
+	}
+
+	config = config.WithDefaults()
+
+	validLogicalClock := config.ElectionClock.LeaderRetryPeriod < config.ElectionClock.LeaderDeadline &&
+		config.ElectionClock.LeaderDeadline < config.ElectionClock.ElectionInterval
+
+	if !validLogicalClock {
+		return nil, errors.New("election clock is not valid sequence of comparators")
+	}
+
 	handler := func() {
 		err := d.GetQuerier().ReleaseLeadership(context.Background(), driver.BasePrams{
 			Name:     config.Name,
 			LeaderId: nodeId,
 		})
 		if err != nil {
-			log.Println("Unable to release leadership gracefully", err)
+			log.Println("unable to release leadership", err)
 		}
 	}
 
 	elector := &Elector{
-		ctx:    ctx,
-		nodeId: nodeId,
-		leaderCallback: LeaderCallback{
-			OnStoppedLeading: func() { return },
-			OnStartedLeading: func() { return },
-			OnNewLeader:      func(nodeId string) { return },
-		},
-		driver: d,
-		config: config,
-		state:  FOLLOWER,
-		mutex:  sync.Mutex{},
+		ctx:                   ctx,
+		nodeId:                nodeId,
+		driver:                d,
+		clock:                 NewClock(),
+		config:                config,
+		mutex:                 sync.Mutex{},
+		maxRenewalErrAttempts: 5,
+		leader:                nil,
 	}
 
 	if config.ReleaseOnCancel {
@@ -87,20 +89,33 @@ func (e *Elector) Start(ctx context.Context) error {
 	if e.config.ReleaseOnCancel {
 		e.contextWatcher.Watch()
 	}
-
+	var attempts int
 	electionTimer := time.NewTimer(0)
 	for {
-		leader, err := e.attemptToAcquireLeadership()
+		leader, err := e.driver.GetQuerier().AcquireLeadership(context.Background(), driver.AcquireLeadershipParams{
+			BasePrams: driver.BasePrams{
+				Name:     e.config.Name,
+				LeaderId: e.nodeId,
+			},
+			LeaseDurationSeconds: e.config.ElectionClock.LeaseDuration.Seconds(),
+		})
 		if err != nil {
-			// TODO: Swallow error for now. Improve later.
+			attempts++
+			WaitBlocking(ctx, attempts)
 			continue
 		}
 
-		if leader {
-			e.changeState(LEADER)
-			e.runBlockingLeadershipLoop(ctx)
+		if leader != nil {
+			e.mutex.Lock()
+			e.leader = leader
+			e.mutex.Unlock()
+
+			if err := e.runBlockingLeadershipLoop(ctx); errors.Is(err, context.Canceled) {
+				return err
+			}
 		}
 
+		attempts = 0
 		jitter := JitterDuration(e.config.ElectionClock.ElectionJitterInterval)
 		electionTimer.Reset(e.config.ElectionClock.ElectionInterval + jitter)
 		select {
@@ -115,125 +130,133 @@ func (e *Elector) isLeader() bool {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	return e.state == LEADER
+	if e.leader == nil {
+		return false
+	}
+
+	now := e.clock.NowUTC()
+	if e.leader.RenewedAt.Time.Add(e.config.ElectionClock.LeaderDeadline).Before(now) {
+		return false
+	}
+
+	return true
 }
 
 func (e *Elector) isFollower() bool {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	return e.state == FOLLOWER
+	return e.leader == nil
 }
 
-func (e *Elector) runBlockingLeadershipLoop(ctx context.Context) {
-	renewalTimer := time.NewTicker(e.config.ElectionClock.LeadRetryPeriod)
-	deadlineTimer := time.NewTimer(e.config.ElectionClock.LeaderDeadline)
-	handOffLeadershipLoss := func() {
-		e.changeState(FOLLOWER)
-		renewalTimer.Stop()
-		deadlineTimer.Stop()
-	}
+func (e *Elector) runBlockingLeadershipLoop(ctx context.Context) error {
+	renewalTimer := time.NewTicker(e.config.ElectionClock.LeaderRetryPeriod)
 
-	defer handOffLeadershipLoss()
+	lCtx, leaderCancel := context.WithCancel(ctx)
+	go e.config.LeaderCallback.OnStartedLeading(lCtx)
+	go e.config.LeaderCallback.OnNewLeader(e.nodeId)
+
+	e.leaderCallbackContextWatcher = NewContextWatcher(
+		func() {
+			e.config.LeaderCallback.OnStoppedLeading()
+		}, lCtx)
+
+	go e.leaderCallbackContextWatcher.Watch()
+
+	var attempts int
 	for {
 		select {
 		case <-renewalTimer.C:
-			ctxTimeout, cancel := context.WithTimeout(ctx, e.config.ElectionClock.LeaderDeadline)
-			renewal, err := e.renewLeadership(ctxTimeout)
-			cancel()
-			if renewal == NO_ROW_AFFECTED {
-				return
-			}
-			if err != nil {
-				continue
-			}
-
-			if !deadlineTimer.Stop() {
-				select {
-				case <-deadlineTimer.C:
-					return
-				default:
+			attempts++
+			err := e.tryRenewLeadership(ctx, func() bool {
+				now := e.clock.NowUTC()
+				hasRenewDeadlineExpired := e.leader.RenewedAt.Time.Add(e.config.ElectionClock.LeaderDeadline).Before(now)
+				if hasRenewDeadlineExpired {
+					return true
 				}
-			}
-			deadlineTimer.Reset(e.config.ElectionClock.LeaderDeadline)
+				return false
+			})
 
-		case <-deadlineTimer.C:
-			return
+			if err != nil {
+				if errors.Is(err, ErrRevokedLeader) || errors.Is(err, ErrDeadlineReached) {
+					e.revokeInternalStateLeadership()
+					leaderCancel()
+					<-e.leaderCallbackContextWatcher.Release()
+					_ = e.driver.GetQuerier().ResignLeadership(ctx, driver.BasePrams{
+						Name:     e.config.Name,
+						LeaderId: e.nodeId,
+					})
+					return err
+				}
+
+				if attempts > e.maxRenewalErrAttempts {
+					e.revokeInternalStateLeadership()
+					leaderCancel()
+					<-e.leaderCallbackContextWatcher.Release()
+					_ = e.driver.GetQuerier().ResignLeadership(ctx, driver.BasePrams{
+						Name:     e.config.Name,
+						LeaderId: e.nodeId,
+					})
+					return err
+				}
+			} else {
+				attempts = 0
+			}
 
 		case <-ctx.Done():
+			// First: Release any work that may be happening on the leader.
+			e.revokeInternalStateLeadership()
+			leaderCancel()
+			<-e.leaderCallbackContextWatcher.Release()
+
+			// Second: Release leadership immediately, so followers can fore-acquire.
 			if e.config.ReleaseOnCancel {
 				<-e.contextWatcher.Release()
 			}
-			return
+			return ctx.Err()
 		}
 	}
 }
 
-func (e *Elector) attemptToAcquireLeadership() (bool, error) {
-	return e.driver.GetQuerier().AcquireLeadership(context.Background(), driver.AcquireLeadershipParams{
-		BasePrams: driver.BasePrams{
-			Name:     e.config.Name,
-			LeaderId: e.nodeId,
-		},
-		LeaseDuration: e.leaseDuration().Seconds(),
-	})
-}
-
-func (e *Elector) renewLeadership(ctx context.Context) (int64, error) {
-	return e.driver.GetQuerier().LeaderRenewal(ctx, driver.LeaderRenewalParams{
-		BasePrams: driver.BasePrams{
-			Name:     e.config.Name,
-			LeaderId: e.nodeId,
-		},
-		LeseDuration: e.leaseDuration().Seconds(),
-	})
-}
-
-func (e *Elector) changeState(state State) {
+func (e *Elector) revokeInternalStateLeadership() {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
-
-	e.state = state
+	e.leader = nil
 }
 
-func (e *Elector) leaseDuration() time.Duration {
-	electionIntervalMs := e.config.ElectionClock.ElectionInterval
-	padding := time.Duration(float64(electionIntervalMs) * 0.5)
-
-	if padding < time.Second*10 {
-		padding = time.Second * 10
+func (e *Elector) tryRenewLeadership(ctx context.Context, hasLeaderDeadlineBeenReached func() bool) error {
+	// Avoid separate timers for LeaderDeadline to keep the logic simple and deterministic.
+	// With timer for LeaderDeadlineTimer and RenewTimer the goroutine scheduling order can be non deterministic.
+	// The Go runtime does not guarantee if renew timer or deadline timer if both concurrently firing timers, will have its goroutine
+	// scheduled first, which could allow the renewal timer to execute before the deadline timer, when both have elapsed.
+	// And depending on the LeaseDuration that was set (non default used), could habe a rather tight TTL,
+	// that could cause leadership split-brain scenarios.
+	if hasLeaderDeadlineBeenReached() {
+		return ErrDeadlineReached
 	}
 
-	if padding > time.Minute*2 {
-		// Set a lower ratio if the padding is over 2 minutes.
-		padding = time.Duration(float64(electionIntervalMs) * 0.2)
+	ctxTimeout, cancel := context.WithTimeout(ctx, e.config.ElectionClock.LeaderDeadline)
+	acquiredLeaderRenewal, err := e.driver.GetQuerier().LeaderRenewal(ctxTimeout, driver.LeaderRenewalParams{
+		BasePrams: driver.BasePrams{
+			Name:     e.config.Name,
+			LeaderId: e.nodeId,
+		},
+		LeseDuration: e.config.ElectionClock.LeaseDuration.Seconds(),
+	})
+	cancel()
+
+	// This should never happen. But used as a safeguard.
+	if err == nil && acquiredLeaderRenewal == nil {
+		return ErrRevokedLeader
 	}
 
-	return e.config.ElectionClock.ElectionInterval + padding
-}
-
-func JitterDuration(d time.Duration) time.Duration {
-	// [0.5-1.1]
-	jitter := 0.5 + rand.Float64()*0.6
-	return time.Duration(float64(d) * jitter)
-}
-
-func getNodeId() (string, error) {
-	// Don't allow super long host names, narrow it down.
-	maxHostLength := 80
-	host, err := os.Hostname()
 	if err != nil {
-		return "", err
-	}
-	if host == "" {
-		host = "default_host"
+		return err
 	}
 
-	if len(host) > maxHostLength {
-		host = host[0:maxHostLength]
-	}
+	e.mutex.Lock()
+	e.leader = acquiredLeaderRenewal
+	e.mutex.Unlock()
 
-	nodeId := strings.NewReplacer(".", "_", "-", "_").Replace(host)
-
-	return nodeId + "_" + strings.ReplaceAll(time.Now().UTC().Format("2006_01_02T15_04_05Z07.00000"), ".", "_"), nil
+	return nil
 }

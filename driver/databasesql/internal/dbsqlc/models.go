@@ -13,7 +13,6 @@ type Leaders struct {
 	ElectedAt time.Time
 	ExpiresAt time.Time
 	RenewedAt sql.NullTime
-	Term      int64
 	Name      string
 	LeaderID  string
 }
