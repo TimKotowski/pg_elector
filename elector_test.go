@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/mock/gomock"
 
@@ -15,6 +14,8 @@ import (
 )
 
 func TestSingleNodeElector(t *testing.T) {
+	t.Parallel()
+
 	t.Run("when ReleaseOnCancel is true, leader node revoked leadership immediately on context cancel", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		d := mockDriver.NewMockDriver(ctrl)
@@ -27,11 +28,11 @@ func TestSingleNodeElector(t *testing.T) {
 			ElectionClock: ElectionClock{
 				LeaderDeadline:         time.Second * 2,
 				LeaderRetryPeriod:      time.Millisecond * 100,
-				ElectionInterval:       time.Second * 4,
+				ElectionInterval:       time.Second * 3,
 				ElectionJitterInterval: time.Millisecond * 80,
 			},
-			LeaderCallback: LeaderCallback{
-				OnStartedLeading: func(ctx context.Context) {
+			LeaderCallback: &LeaderCallback{
+				OnStartedLeading: func(ctx context.Context, leader *ElectedLeader) {
 					startedLeading <- struct{}{}
 				},
 				OnStoppedLeading: func() {
@@ -48,18 +49,18 @@ func TestSingleNodeElector(t *testing.T) {
 		querier.EXPECT().AcquireLeadership(gomock.Any(), gomock.Any()).Return(&driver.Leader{
 			ElectedAt: time.Now().UTC(),
 			ExpiresAt: time.Now().UTC().Add(5 * time.Minute),
-			RenewedAt: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+			RenewedAt: time.Now().UTC(),
 			Name:      "pg_elector",
 			LeaderID:  "leader-001",
 		}, nil)
 		querier.EXPECT().LeaderRenewal(gomock.Any(), gomock.Any()).AnyTimes().Return(&driver.Leader{
 			ElectedAt: time.Now().UTC(),
 			ExpiresAt: time.Now().UTC().Add(5 * time.Minute),
-			RenewedAt: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+			RenewedAt: time.Now().UTC(),
 			Name:      "pg_elector",
 			LeaderID:  "leader-001",
 		}, nil)
-		querier.EXPECT().ReleaseLeadership(gomock.Any(), gomock.Any()).Times(1).Return(nil)
+		querier.EXPECT().ResignLeadership(gomock.Any(), gomock.Any()).Times(1).Return(nil)
 
 		wg := &sync.WaitGroup{}
 		wg.Add(1)
@@ -93,13 +94,13 @@ func TestSingleNodeElector(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		elector, err := NewLeaderElector(ctx, d, &Config{
 			ElectionClock: ElectionClock{
-				LeaderDeadline:         time.Second * 2,
+				LeaderDeadline:         time.Second * 1,
 				LeaderRetryPeriod:      time.Millisecond * 100,
-				ElectionInterval:       time.Second * 4,
+				ElectionInterval:       time.Second * 2,
 				ElectionJitterInterval: time.Millisecond * 80,
 			},
-			LeaderCallback: LeaderCallback{
-				OnStartedLeading: func(ctx context.Context) {
+			LeaderCallback: &LeaderCallback{
+				OnStartedLeading: func(ctx context.Context, leader *ElectedLeader) {
 					startedLeading <- struct{}{}
 				},
 				OnStoppedLeading: func() {
@@ -116,18 +117,18 @@ func TestSingleNodeElector(t *testing.T) {
 		querier.EXPECT().AcquireLeadership(gomock.Any(), gomock.Any()).Return(&driver.Leader{
 			ElectedAt: time.Now().UTC(),
 			ExpiresAt: time.Now().UTC().Add(5 * time.Minute),
-			RenewedAt: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+			RenewedAt: time.Now().UTC(),
 			Name:      "pg_elector",
 			LeaderID:  "leader-001",
 		}, nil)
 		querier.EXPECT().LeaderRenewal(gomock.Any(), gomock.Any()).AnyTimes().Return(&driver.Leader{
 			ElectedAt: time.Now().UTC(),
 			ExpiresAt: time.Now().UTC().Add(5 * time.Minute),
-			RenewedAt: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+			RenewedAt: time.Now().UTC(),
 			Name:      "pg_elector",
 			LeaderID:  "leader-001",
 		}, nil)
-		querier.EXPECT().ReleaseLeadership(gomock.Any(), gomock.Any()).Times(0).Return(nil)
+		querier.EXPECT().ResignLeadership(gomock.Any(), gomock.Any()).Times(0).Return(nil)
 
 		wg := &sync.WaitGroup{}
 		wg.Add(1)
@@ -161,13 +162,13 @@ func TestSingleNodeElector(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		elector, err := NewLeaderElector(ctx, d, &Config{
 			ElectionClock: ElectionClock{
-				LeaderDeadline:         time.Second * 2,
+				LeaderDeadline:         time.Second * 1,
 				LeaderRetryPeriod:      time.Millisecond * 100,
-				ElectionInterval:       time.Second * 10,
+				ElectionInterval:       time.Second * 2,
 				ElectionJitterInterval: time.Millisecond * 80,
 			},
-			LeaderCallback: LeaderCallback{
-				OnStartedLeading: func(ctx context.Context) {
+			LeaderCallback: &LeaderCallback{
+				OnStartedLeading: func(ctx context.Context, leader *ElectedLeader) {
 					startedLeading <- struct{}{}
 				},
 				OnStoppedLeading: func() {
@@ -188,19 +189,19 @@ func TestSingleNodeElector(t *testing.T) {
 		querier.EXPECT().AcquireLeadership(gomock.Any(), gomock.Any()).Return(&driver.Leader{
 			ElectedAt: time.Now().UTC(),
 			ExpiresAt: time.Now().UTC().Add(5 * time.Minute),
-			RenewedAt: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+			RenewedAt: time.Now().UTC(),
 			Name:      "pg_elector",
 			LeaderID:  "leader-001",
 		}, nil)
 		querier.EXPECT().LeaderRenewal(gomock.Any(), gomock.Any()).AnyTimes().Return(&driver.Leader{
 			ElectedAt: time.Now().UTC(),
 			ExpiresAt: time.Now().UTC().Add(5 * time.Minute),
-			RenewedAt: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+			RenewedAt: time.Now().UTC(),
 			Name:      "pg_elector",
 			LeaderID:  "leader-001",
 		}, nil)
 
-		querier.EXPECT().ReleaseLeadership(gomock.Any(), gomock.Any()).Times(0)
+		querier.EXPECT().ResignLeadership(gomock.Any(), gomock.Any()).Times(0)
 
 		wg := &sync.WaitGroup{}
 		wg.Add(1)
@@ -232,13 +233,13 @@ func TestSingleNodeElector(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		elector, err := NewLeaderElector(ctx, d, &Config{
 			ElectionClock: ElectionClock{
-				LeaderDeadline:         time.Second * 2,
+				LeaderDeadline:         time.Second * 1,
 				LeaderRetryPeriod:      time.Millisecond * 1,
-				ElectionInterval:       time.Second * 3,
+				ElectionInterval:       time.Second * 2,
 				ElectionJitterInterval: time.Millisecond * 1,
 			},
-			LeaderCallback: LeaderCallback{
-				OnStartedLeading: func(ctx context.Context) {
+			LeaderCallback: &LeaderCallback{
+				OnStartedLeading: func(ctx context.Context, leader *ElectedLeader) {
 					startedLeading <- struct{}{}
 				},
 				OnStoppedLeading: func() {
@@ -258,7 +259,7 @@ func TestSingleNodeElector(t *testing.T) {
 		querier.EXPECT().AcquireLeadership(gomock.Any(), gomock.Any()).Times(1).Return(&driver.Leader{
 			ElectedAt: time.Now().UTC(),
 			ExpiresAt: time.Now().UTC().Add(5 * time.Minute),
-			RenewedAt: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+			RenewedAt: time.Now().UTC(),
 			Name:      "pg_elector",
 			LeaderID:  "leader-001",
 		}, nil)
@@ -269,14 +270,13 @@ func TestSingleNodeElector(t *testing.T) {
 					return &driver.Leader{
 						ElectedAt: time.Now().UTC(),
 						ExpiresAt: time.Now().UTC().Add(5 * time.Minute),
-						RenewedAt: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+						RenewedAt: time.Now().UTC(),
 						Name:      "pg_elector",
 						LeaderID:  "leader-001",
 					}, nil
 				}),
 			querier.EXPECT().LeaderRenewal(gomock.Any(), gomock.Any()).Return(nil, nil),
 		)
-		querier.EXPECT().ReleaseLeadership(gomock.Any(), gomock.Any()).Times(0)
 		querier.EXPECT().ResignLeadership(gomock.Any(), gomock.Any()).Times(1).Return(nil)
 
 		wg := &sync.WaitGroup{}
@@ -299,13 +299,13 @@ func TestSingleNodeElector(t *testing.T) {
 		cancel()
 	})
 	//t.Run("leader steps down when LeaderDeadline is reached", func(t *testing.T) {})
-	//t.Run("leader steps down when LeaderDeadline has been reached, during long running renewal query", func(t *testing.T) {})
+	//t.Run("leader steps down when LeaderDeadline has been reached, during long-running renewal query", func(t *testing.T) {})
 	//
 	//t.Run("when the database layer fails, for leader allow continuing election process till max attempts reached", func(t *testing.T) {})
 	//t.Run("when the database layer fails, for followers allow continuing election process till max attempts reached", func(t *testing.T) {})
 	//
 	//t.Run("follower retries acquiring leader after failed attempt without crashing", func(t *testing.T) {})
-	t.Run("follower remains follower when acquire returns false with no error", func(t *testing.T) {})
+	//t.Run("follower remains follower when acquire returns false with no error", func(t *testing.T) {})
 }
 
 //func MultiNodeElector(t *testing.T) {

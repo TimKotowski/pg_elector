@@ -3,8 +3,6 @@ package driver
 import (
 	"context"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Driver interface {
@@ -14,7 +12,6 @@ type Driver interface {
 type Querier interface {
 	AcquireLeadership(ctx context.Context, param AcquireLeadershipParams) (*Leader, error)
 	LeaderRenewal(ctx context.Context, param LeaderRenewalParams) (*Leader, error)
-	ReleaseLeadership(ctx context.Context, param BasePrams) error
 	ResignLeadership(ctx context.Context, param BasePrams) error
 }
 
@@ -34,9 +31,10 @@ type LeaderRenewalParams struct {
 }
 
 type Leader struct {
-	ElectedAt time.Time
-	ExpiresAt time.Time
-	RenewedAt pgtype.Timestamptz
 	Name      string
 	LeaderID  string
+	ElectedAt time.Time
+	ExpiresAt time.Time
+	RenewedAt time.Time
+	Term      int64
 }
