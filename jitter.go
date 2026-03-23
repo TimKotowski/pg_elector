@@ -5,9 +5,18 @@ import (
 	"time"
 )
 
-// Todo fix to add own scale.
-func JitterDuration(d time.Duration) time.Duration {
-	// [0.5-1.1]
-	jitter := 0.5 + rand.Float64()*0.6
+// For elections a good node stagger, use 0.5 to 1.1
+// [0.5-1.1]
+const (
+	JitterMin = 0.5
+	JitterMax = 1.1
+)
+
+func applyJitter(d time.Duration, min, max float64) time.Duration {
+	if min > max {
+		min, max = max, min
+	}
+
+	jitter := min + rand.Float64()*(max-min)
 	return time.Duration(float64(d) * jitter)
 }

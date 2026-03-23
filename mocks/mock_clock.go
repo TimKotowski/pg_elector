@@ -7,13 +7,13 @@
 //
 
 // Package mockDriver is a generated GoMock package.
-package mockDriver
+package mocks
 
 import (
-	reflect "reflect"
-	time "time"
+	"reflect"
+	"time"
 
-	gomock "go.uber.org/mock/gomock"
+	"go.uber.org/mock/gomock"
 )
 
 // MockClock is a mock of Clock interface.

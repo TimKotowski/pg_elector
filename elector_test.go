@@ -10,7 +10,7 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/TimKotowski/pg_elector/driver"
-	"github.com/TimKotowski/pg_elector/driver/mockDriver"
+	mockDriver2 "github.com/TimKotowski/pg_elector/mocks"
 )
 
 func TestSingleNodeElector(t *testing.T) {
@@ -18,8 +18,8 @@ func TestSingleNodeElector(t *testing.T) {
 
 	t.Run("when ReleaseOnCancel is true, leader node revoked leadership immediately on context cancel", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
-		d := mockDriver.NewMockDriver(ctrl)
-		querier := mockDriver.NewMockQuerier(ctrl)
+		d := mockDriver2.NewMockDriver(ctrl)
+		querier := mockDriver2.NewMockQuerier(ctrl)
 
 		startedLeading := make(chan struct{}, 1)
 		onStoppedLeader := make(chan struct{}, 1)
@@ -86,8 +86,8 @@ func TestSingleNodeElector(t *testing.T) {
 
 	t.Run("when ReleaseOnCancel is false, leadership is naturally released by waiting for lease duration to expire", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
-		d := mockDriver.NewMockDriver(ctrl)
-		querier := mockDriver.NewMockQuerier(ctrl)
+		d := mockDriver2.NewMockDriver(ctrl)
+		querier := mockDriver2.NewMockQuerier(ctrl)
 
 		startedLeading := make(chan struct{}, 1)
 		onStoppedLeader := make(chan struct{}, 1)
@@ -154,8 +154,8 @@ func TestSingleNodeElector(t *testing.T) {
 
 	t.Run("successful renewals keep leader beyond initial deadline window", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
-		d := mockDriver.NewMockDriver(ctrl)
-		querier := mockDriver.NewMockQuerier(ctrl)
+		d := mockDriver2.NewMockDriver(ctrl)
+		querier := mockDriver2.NewMockQuerier(ctrl)
 
 		startedLeading := make(chan struct{}, 1)
 		onStoppedLeader := make(chan struct{}, 1)
@@ -179,7 +179,7 @@ func TestSingleNodeElector(t *testing.T) {
 			Name:            "pg_elector",
 			ReleaseOnCancel: false,
 		})
-		mockClock := mockDriver.NewMockClock(ctrl)
+		mockClock := mockDriver2.NewMockClock(ctrl)
 		elector.clock = mockClock
 		assert.NoError(t, err)
 
@@ -225,8 +225,8 @@ func TestSingleNodeElector(t *testing.T) {
 
 	t.Run("leader resigns when renewal was revoked", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
-		d := mockDriver.NewMockDriver(ctrl)
-		querier := mockDriver.NewMockQuerier(ctrl)
+		d := mockDriver2.NewMockDriver(ctrl)
+		querier := mockDriver2.NewMockQuerier(ctrl)
 
 		startedLeading := make(chan struct{}, 1)
 		onStoppedLeader := make(chan struct{}, 1)
@@ -250,7 +250,7 @@ func TestSingleNodeElector(t *testing.T) {
 			Name:            "pg_elector",
 			ReleaseOnCancel: false,
 		})
-		mockClock := mockDriver.NewMockClock(ctrl)
+		mockClock := mockDriver2.NewMockClock(ctrl)
 		elector.clock = mockClock
 		assert.NoError(t, err)
 
@@ -298,24 +298,16 @@ func TestSingleNodeElector(t *testing.T) {
 
 		cancel()
 	})
-	//t.Run("leader steps down when LeaderDeadline is reached", func(t *testing.T) {})
-	//t.Run("leader steps down when LeaderDeadline has been reached, during long-running renewal query", func(t *testing.T) {})
-	//
-	//t.Run("when the database layer fails, for leader allow continuing election process till max attempts reached", func(t *testing.T) {})
-	//t.Run("when the database layer fails, for followers allow continuing election process till max attempts reached", func(t *testing.T) {})
-	//
-	//t.Run("follower retries acquiring leader after failed attempt without crashing", func(t *testing.T) {})
-	//t.Run("follower remains follower when acquire returns false with no error", func(t *testing.T) {})
-}
 
-//func MultiNodeElector(t *testing.T) {
-//	t.Run("multiple nodes spawn, with at most once, leadership acquired", func(t *testing.T) {})
-//	t.Run("when leader losses leadership, a new node takes leadership", func(t *testing.T) {})
-//}
-//
-//func TestElectorDuration(t *testing.T) {
-//	t.Run("leaseDuration returns interval plus 50 percent padding for short intervals", func(t *testing.T) {})
-//	t.Run("leaseDuration clamps padding to minimum 10 seconds", func(t *testing.T) {})
-//	t.Run("leaseDuration reduces padding ratio when padding exceeds 2 minutes", func(t *testing.T) {})
-//	t.Run("JitterDuration output is always within 0.5x to 1.1x of input", func(t *testing.T) {})
-//}
+	//t.Run("leader steps down when LeaderDeadline is reached", func(t *testing.T) {})
+
+	//t.Run("leader steps down when LeaderDeadline has been reached, during long-running renewal query", func(t *testing.T) {})
+
+	//t.Run("when the database layer fails, for leader allows continuing election process till max attempts reached or leader deadline is reached", func(t *testing.T) {})
+
+	//t.Run("when the database layer fails when force acquiring leadership, for followers allow continuing election process till max attempts reached", func(t *testing.T) {})
+
+	//t.Run("follower retries acquiring leader after failed attempt without reaching max attempts", func(t *testing.T) {})
+
+	//t.Run("follower path is deterministic, when force acquiring leadership was un-successful", func(t *testing.T) {})
+}

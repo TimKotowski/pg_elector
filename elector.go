@@ -118,7 +118,7 @@ func (e *Elector) Start(ctx context.Context) error {
 		})
 		if err != nil {
 			attempts++
-			WaitBlocking(ctx, attempts)
+			WaitBlocking(ctx, attempts, JitterMin, JitterMax)
 			continue
 		}
 
@@ -133,7 +133,9 @@ func (e *Elector) Start(ctx context.Context) error {
 		}
 
 		attempts = 0
-		jitter := JitterDuration(e.config.ElectionClock.ElectionJitterInterval)
+
+		// For elections, use a fixed base + jitter
+		jitter := applyJitter(e.config.ElectionClock.ElectionJitterInterval, JitterMin, JitterMax)
 		electionTimer.Reset(e.config.ElectionClock.ElectionInterval + jitter)
 		select {
 		case <-ctx.Done():

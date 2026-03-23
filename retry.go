@@ -7,33 +7,27 @@ import (
 )
 
 var (
-	RetryMax     = 5
-	RetryWaitMin = time.Second * 2
-	RetryWaitMax = time.Second * 30
+	MinRetryDelay = time.Second * 2
+	MaxRetryDelay = time.Second * 30
 )
 
-type retry struct {
-	ctx  context.Context
-	time *time.Timer
-}
-
-func exponentialBackoffWithJitter(attempts int) time.Duration {
+func exponentialBackoffWithJitter(attempts int, jitterMin, jitterMax float64) time.Duration {
 	mult := math.Pow(2, float64(attempts))
-	wait := time.Duration(float64(RetryWaitMin) * mult)
-	if wait > RetryWaitMax {
-		wait = RetryWaitMax
+	wait := time.Duration(float64(MinRetryDelay) * mult)
+	if wait > MaxRetryDelay {
+		wait = MaxRetryDelay
 	}
-	wait = wait + JitterDuration(wait)
+	wait = applyJitter(wait, jitterMin, jitterMax)
 
-	if wait > RetryWaitMax {
-		wait = RetryWaitMax
+	if wait > MaxRetryDelay {
+		wait = MaxRetryDelay
 	}
 
 	return wait
 }
 
-func WaitBlocking(ctx context.Context, attempts int) {
-	wait := time.NewTimer(exponentialBackoffWithJitter(attempts))
+func WaitBlocking(ctx context.Context, attempts int, jitterMin, jitterMax float64) {
+	wait := time.NewTimer(exponentialBackoffWithJitter(attempts, jitterMin, jitterMax))
 
 	select {
 	case <-wait.C:
