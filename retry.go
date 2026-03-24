@@ -26,7 +26,7 @@ func exponentialBackoffWithJitter(attempts int, jitterMin, jitterMax float64) ti
 	return wait
 }
 
-func WaitBlocking(ctx context.Context, attempts int, jitterMin, jitterMax float64) {
+func WaitCancelableBlocking(ctx context.Context, attempts int, jitterMin, jitterMax float64) {
 	wait := time.NewTimer(exponentialBackoffWithJitter(attempts, jitterMin, jitterMax))
 
 	select {

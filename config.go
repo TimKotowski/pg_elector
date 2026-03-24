@@ -31,11 +31,12 @@ type Config struct {
 	// Defaults to "default".
 	Name string
 
-	// ReleaseOnCancel set to true if on cancel of context, the leaderships lock should be released immediately.
+	// ReleaseOnCancel set to true if on cancel of context, the leaderships lease should be released immediately.
 	// You must ensure though, that all code actions are handled before wanting to cancel leadership immediately.
-	// Once released, the elector process will gracefully shut down.
 
-	// ReleaseOnCancel set to false, if on cancel of context. Will let the leadership expire naturally before gracefully shutting down.
+	// ReleaseOnCancel set to false, if on cancel of context. Will let the leadership expire naturally.
+	// Be aware, if ReleaseOnCancel is set to default false, LeaseDuration will be held by released leader, till LeaserDuration has elapsed.
+	// This would be a potentially long duration of no leader activity.
 
 	// Defaults to false.
 	ReleaseOnCancel bool
