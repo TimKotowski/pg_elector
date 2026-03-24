@@ -244,8 +244,8 @@ func (e *Elector) maintainLeadership(ctx context.Context) error {
 
 		case <-ctx.Done():
 			// First: Release any work that may be happening on the leader.
-			e.revokeInternalStateLeadership()
 			leaderCancel()
+			e.revokeInternalStateLeadership()
 			<-e.leaderCallbackContextWatcher.Release()
 
 			// Second: Release leadership immediately, so followers can fore-acquire.
