@@ -187,6 +187,18 @@ func (e *Elector) maintainLeadership(ctx context.Context) error {
 	go e.leaderCallback.OnNewLeader(e.nodeId)
 	go e.leaderCallbackContextWatcher.Watch()
 
+	stepdownLeadership := func() error {
+		leaderCancel()
+		err := e.driver.GetQuerier().ResignLeadership(ctx, driver.BasePrams{
+			Name:     e.name,
+			LeaderId: e.nodeId,
+		})
+		e.revokeInternalStateLeadership()
+		<-e.leaderCallbackContextWatcher.Release()
+
+		return err
+	}
+
 	var errorCount int
 	renewalTimer := time.NewTicker(e.electionClock.LeaderRetryPeriod)
 	deadlineTimer := time.NewTimer(e.electionClock.LeaderDeadline)
@@ -204,13 +216,7 @@ func (e *Elector) maintainLeadership(ctx context.Context) error {
 			if err != nil {
 				errorCount++
 				if errors.Is(err, ErrRevokedLeader) || errors.Is(err, ErrDeadlineReached) {
-					e.revokeInternalStateLeadership()
-					leaderCancel()
-					resignErr := e.driver.GetQuerier().ResignLeadership(ctx, driver.BasePrams{
-						Name:     e.name,
-						LeaderId: e.nodeId,
-					})
-					<-e.leaderCallbackContextWatcher.Release()
+					resignErr := stepdownLeadership()
 					if resignErr != nil {
 						e.logger.ErrorContext(ctx, "Failed to Resign Leadership", "error", err)
 					}
@@ -218,16 +224,10 @@ func (e *Elector) maintainLeadership(ctx context.Context) error {
 				}
 
 				if errorCount >= e.maxErrAttempts {
-					e.revokeInternalStateLeadership()
-					leaderCancel()
-					resignErr := e.driver.GetQuerier().ResignLeadership(ctx, driver.BasePrams{
-						Name:     e.name,
-						LeaderId: e.nodeId,
-					})
+					resignErr := stepdownLeadership()
 					if resignErr != nil {
 						e.logger.ErrorContext(ctx, "Failed to Resign Leadership", "error", err)
 					}
-					<-e.leaderCallbackContextWatcher.Release()
 					return err
 				}
 			} else {
@@ -236,13 +236,10 @@ func (e *Elector) maintainLeadership(ctx context.Context) error {
 			}
 
 		case <-deadlineTimer.C:
-			e.revokeInternalStateLeadership()
-			leaderCancel()
-			_ = e.driver.GetQuerier().ResignLeadership(ctx, driver.BasePrams{
-				Name:     e.name,
-				LeaderId: e.nodeId,
-			})
-			<-e.leaderCallbackContextWatcher.Release()
+			err := stepdownLeadership()
+			if err != nil {
+				e.logger.ErrorContext(ctx, "Failed to Resign Leadership", "error", err)
+			}
 			return nil
 
 		case <-ctx.Done():
