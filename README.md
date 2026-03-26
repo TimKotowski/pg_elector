@@ -27,7 +27,7 @@ When leadership is lost, the context passed to every running task is cancelled i
 
 The only scenario where two leaders can briefly coexist is a **full process freeze**. Where container throttling, VM live migration, `SIGSTOP`, or work happening in the leader callback is causing swap thrashing, that lasts longer than the entire `LeaseDuration`. During a freeze, no Go code executes, timers don't fire, contexts don't cancel, and the leader cannot detect that its lease has expired. Meanwhile, Postgres clock continues, the lease expires, and another node acquires leadership. When the frozen process resumes, there is a brief window before the deadline check runs where stale work could execute.
 
-This is not a clock skew issue or a GC issue. Go's garbage collector pauses are sub-millisecond and do not cause this. It requires the entire OS process to be suspended for longer than `LeaseDuration`, which is an extreme operational scenario. This is where fencing with terms is incorporated as a extra safety measure.
+This is not a clock skew issue or a GC issue. It requires the entire OS process to be suspended for longer than `LeaseDuration`, which is an extreme operational scenario. This is where fencing with terms is incorporated as a extra safety measure.
 
 ### Fencing with terms
 
