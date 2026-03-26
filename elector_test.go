@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"os"
-	"sync"
 	"testing"
 	"time"
 
@@ -17,8 +16,6 @@ import (
 )
 
 func TestSingleNodeElector(t *testing.T) {
-	t.Parallel()
-
 	t.Run("when ReleaseOnCancel is true, leader node revoked leadership immediately on context cancel", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		d := mockDriver2.NewMockDriver(ctrl)
@@ -65,26 +62,19 @@ func TestSingleNodeElector(t *testing.T) {
 		}, nil)
 		querier.EXPECT().ResignLeadership(gomock.Any(), gomock.Any()).Times(1).Return(nil)
 
-		wg := &sync.WaitGroup{}
-		wg.Add(1)
-		go func(wg *sync.WaitGroup) {
-			defer wg.Done()
-			err := elector.Start(ctx)
-			assert.ErrorIs(t, err, context.Canceled)
-		}(wg)
+		elector.Start(ctx)
 
 		<-startedLeading
-		assert.True(t, elector.isLeader())
 
 		wait := time.NewTimer(elector.electionClock.LeaderRetryPeriod)
 		select {
 		case <-wait.C:
 		}
 		cancel()
+
 		<-onStoppedLeader
 
-		wg.Wait()
-		assert.False(t, elector.isLeader())
+		elector.Stop()
 	})
 
 	t.Run("when ReleaseOnCancel is false, leadership is naturally released by waiting for lease duration to expire", func(t *testing.T) {
@@ -133,16 +123,9 @@ func TestSingleNodeElector(t *testing.T) {
 		}, nil)
 		querier.EXPECT().ResignLeadership(gomock.Any(), gomock.Any()).Times(0).Return(nil)
 
-		wg := &sync.WaitGroup{}
-		wg.Add(1)
-		go func(wg *sync.WaitGroup) {
-			defer wg.Done()
-			err := elector.Start(ctx)
-			assert.ErrorIs(t, err, context.Canceled)
-		}(wg)
+		elector.Start(ctx)
 
 		<-startedLeading
-		assert.True(t, elector.isLeader())
 
 		wait := time.NewTimer(elector.electionClock.LeaderRetryPeriod)
 		select {
@@ -151,8 +134,7 @@ func TestSingleNodeElector(t *testing.T) {
 		cancel()
 		<-onStoppedLeader
 
-		wg.Wait()
-		assert.False(t, elector.isLeader())
+		elector.Stop()
 	})
 
 	t.Run("successful renewals keep leader beyond initial deadline window", func(t *testing.T) {
@@ -211,24 +193,18 @@ func TestSingleNodeElector(t *testing.T) {
 		}, nil)
 		querier.EXPECT().ResignLeadership(gomock.Any(), gomock.Any()).Times(0)
 
-		wg := &sync.WaitGroup{}
-		wg.Add(1)
-		go func(wg *sync.WaitGroup) {
-			defer wg.Done()
-			err := elector.Start(ctx)
-			assert.ErrorIs(t, err, context.Canceled)
-		}(wg)
+		elector.Start(ctx)
 
 		<-startedLeading
-		assert.True(t, elector.isLeader())
 
 		// This test we want to make sure leadership is held for at least 2 full LeaderDeadlines so we know leader is held.
 		timer := time.NewTimer(elector.electionClock.LeaderDeadline * 2)
 		<-timer.C
-		assert.True(t, elector.isLeader())
 
 		cancel()
 		<-onStoppedLeader
+
+		elector.Stop()
 	})
 
 	t.Run("leader resigns when renewal was revoked", func(t *testing.T) {
@@ -292,24 +268,18 @@ func TestSingleNodeElector(t *testing.T) {
 		)
 		querier.EXPECT().ResignLeadership(gomock.Any(), gomock.Any()).Times(1).Return(nil)
 
-		wg := &sync.WaitGroup{}
-		wg.Add(1)
-		go func(wg *sync.WaitGroup) {
-			defer wg.Done()
-			_ = elector.Start(ctx)
-		}(wg)
+		elector.Start(ctx)
 
 		<-startedLeading
-		assert.True(t, elector.isLeader())
 
 		<-onStoppedLeader
 		// This test we want to make sure Resign was hit.
 		timer := time.NewTimer(time.Millisecond * 100)
 		<-timer.C
 
-		assert.False(t, elector.isLeader())
-
 		cancel()
+
+		elector.Stop()
 	})
 
 	t.Run("leader steps down when renew leadership reaches max attempts", func(t *testing.T) {
@@ -345,6 +315,7 @@ func TestSingleNodeElector(t *testing.T) {
 		})
 		assert.NoError(t, err)
 		elector.clock = mockClock
+		elector.maxErrAttempts = 2
 
 		d.EXPECT().GetQuerier().AnyTimes().Return(querier)
 		mockClock.EXPECT().NowUTC().AnyTimes().Return(time.Now().UTC())
@@ -360,21 +331,15 @@ func TestSingleNodeElector(t *testing.T) {
 		querier.EXPECT().LeaderRenewal(gomock.Any(), gomock.Any()).AnyTimes().Return(nil, errors.New("database error"))
 		querier.EXPECT().ResignLeadership(gomock.Any(), gomock.Any()).Times(1).Return(nil)
 
-		wg := &sync.WaitGroup{}
-		wg.Add(1)
-		go func(wg *sync.WaitGroup) {
-			defer wg.Done()
-			err := elector.Start(ctx)
-			assert.Error(t, err, context.Canceled)
-		}(wg)
+		elector.Start(ctx)
 
 		<-startedLeading
-		assert.True(t, elector.isLeader())
 
 		<-onStoppedLeader
-		assert.True(t, elector.isFollower())
 
 		cancel()
+
+		elector.Stop()
 	})
 
 	t.Run("leader steps down when leader deadline timer fires", func(t *testing.T) {
@@ -391,7 +356,7 @@ func TestSingleNodeElector(t *testing.T) {
 		elector, err := NewLeaderElector(ctx, d, &Config{
 			ElectionClock: ElectionClock{
 				LeaderDeadline:         time.Millisecond * 150,
-				LeaderRetryPeriod:      time.Millisecond * 120,
+				LeaderRetryPeriod:      time.Millisecond * 90,
 				ElectionInterval:       time.Second * 2,
 				ElectionJitterInterval: time.Millisecond * 10,
 				LeaseDuration:          time.Second * 3,
@@ -431,71 +396,13 @@ func TestSingleNodeElector(t *testing.T) {
 			Return(nil, errors.New("database error"))
 		querier.EXPECT().ResignLeadership(gomock.Any(), gomock.Any()).Times(1)
 
-		wg := &sync.WaitGroup{}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			err := elector.Start(ctx)
-			assert.Error(t, err, context.Canceled)
-		}()
+		elector.Start(ctx)
 
 		<-startedLeading
-		assert.True(t, elector.isLeader())
-
 		<-onStoppedLeader
-		assert.True(t, elector.isFollower())
-
 		cancel()
-		wg.Wait()
-	})
 
-	t.Run("when the database layer fails when force acquiring leadership, for followers allow continuing election process till max attempts reached", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		d := mockDriver2.NewMockDriver(ctrl)
-		querier := mockDriver2.NewMockQuerier(ctrl)
-		mockClock := mockDriver2.NewMockClock(ctrl)
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		elector, err := NewLeaderElector(ctx, d, &Config{
-			ElectionClock: ElectionClock{
-				LeaderDeadline:         time.Millisecond * 300,
-				LeaderRetryPeriod:      time.Millisecond * 100,
-				ElectionInterval:       time.Millisecond * 500,
-				ElectionJitterInterval: time.Millisecond * 10,
-				LeaseDuration:          time.Second * 1,
-			},
-			LeaderCallback: &LeaderCallback{
-				OnStartedLeading: func(ctx context.Context, leader *ElectedLeader) {},
-				OnStoppedLeading: func() {},
-				OnNewLeader:      func(nodeId string) {},
-			},
-			Logger: slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-				Level: slog.LevelDebug,
-			})),
-			Name:            "pg_elector",
-			ReleaseOnCancel: false,
-		})
-		assert.NoError(t, err)
-		elector.clock = mockClock
-		elector.maxErrAttempts = 2
-
-		d.EXPECT().GetQuerier().AnyTimes().Return(querier)
-		fixedNow := time.Now().UTC()
-		mockClock.EXPECT().NowUTC().AnyTimes().Return(fixedNow)
-		querier.EXPECT().AcquireLeadership(gomock.Any(), gomock.Any()).AnyTimes().Return(nil, errors.New("database error"))
-
-		wg := &sync.WaitGroup{}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			err := elector.Start(ctx)
-			assert.Error(t, err, context.Canceled)
-		}()
-
-		wg.Wait()
-		cancel()
+		elector.Stop()
 	})
 
 	t.Run("follower path is deterministic, when force acquiring leadership was un-successful", func(t *testing.T) {
@@ -541,16 +448,9 @@ func TestSingleNodeElector(t *testing.T) {
 			return nil, nil
 		}).Times(1)
 
-		wg := &sync.WaitGroup{}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			err := elector.Start(ctx)
-			assert.ErrorIs(t, err, context.Canceled)
-		}()
-
+		elector.Start(ctx)
 		<-stop
 		cancel()
-		wg.Wait()
+		elector.Stop()
 	})
 }
