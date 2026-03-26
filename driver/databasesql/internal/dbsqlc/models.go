@@ -5,14 +5,14 @@
 package dbsqlc
 
 import (
-	"database/sql"
 	"time"
 )
 
 type Leaders struct {
 	ElectedAt time.Time
 	ExpiresAt time.Time
-	RenewedAt sql.NullTime
+	RenewedAt time.Time
+	Term      int64
 	Name      string
 	LeaderID  string
 }

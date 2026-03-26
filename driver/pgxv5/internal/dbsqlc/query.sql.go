@@ -16,9 +16,10 @@ ON CONFLICT (name) DO UPDATE
 SET elected_at = NOW(),
     expires_at = NOW() + MAKE_INTERVAL(secs => $3),
     renewed_at = NOW(),
-    leader_id = $2
+    leader_id = $2,
+    term = leaders.term + 1
 WHERE expires_at < NOW() AND name = $1
-RETURNING elected_at, expires_at, renewed_at, name, leader_id
+RETURNING elected_at, expires_at, renewed_at, term, name, leader_id
 `
 
 type AcquireLeadershipParams struct {
@@ -34,6 +35,7 @@ func (q *Queries) AcquireLeadership(ctx context.Context, db DBTX, arg *AcquireLe
 		&i.ElectedAt,
 		&i.ExpiresAt,
 		&i.RenewedAt,
+		&i.Term,
 		&i.Name,
 		&i.LeaderID,
 	)
@@ -44,56 +46,49 @@ const leaderRenewal = `-- name: LeaderRenewal :one
 UPDATE leaders
 SET renewed_at = NOW(),
     expires_at = NOW() + MAKE_INTERVAL(secs => $1)
-WHERE name = $2 AND leader_id = $3 and expires_at >= NOW()
-RETURNING elected_at, expires_at, renewed_at, name, leader_id
+WHERE name = $2 AND leader_id = $3 and expires_at >= NOW() and term = $4
+RETURNING elected_at, expires_at, renewed_at, term, name, leader_id
 `
 
 type LeaderRenewalParams struct {
 	Leaseduration float64
 	Name          string
 	Leaderid      string
+	Term          int64
 }
 
 func (q *Queries) LeaderRenewal(ctx context.Context, db DBTX, arg *LeaderRenewalParams) (*Leaders, error) {
-	row := db.QueryRow(ctx, leaderRenewal, arg.Leaseduration, arg.Name, arg.Leaderid)
+	row := db.QueryRow(ctx, leaderRenewal,
+		arg.Leaseduration,
+		arg.Name,
+		arg.Leaderid,
+		arg.Term,
+	)
 	var i Leaders
 	err := row.Scan(
 		&i.ElectedAt,
 		&i.ExpiresAt,
 		&i.RenewedAt,
+		&i.Term,
 		&i.Name,
 		&i.LeaderID,
 	)
 	return &i, err
 }
 
-const releaseLeadership = `-- name: ReleaseLeadership :exec
-DELETE FROM leaders
-WHERE name = $1 AND leader_id = $2
-`
-
-type ReleaseLeadershipParams struct {
-	Name     string
-	Leaderid string
-}
-
-func (q *Queries) ReleaseLeadership(ctx context.Context, db DBTX, arg *ReleaseLeadershipParams) error {
-	_, err := db.Exec(ctx, releaseLeadership, arg.Name, arg.Leaderid)
-	return err
-}
-
 const resignLeadership = `-- name: ResignLeadership :exec
 UPDATE leaders
-SET expires_at = NOW()
-WHERE name = $1 AND leader_id = $2
+SET expires_at = NOW() - MAKE_INTERVAL(secs => $1)
+WHERE name = $2 AND leader_id = $3
 `
 
 type ResignLeadershipParams struct {
-	Name     string
-	Leaderid string
+	Leaseduration float64
+	Name          string
+	Leaderid      string
 }
 
 func (q *Queries) ResignLeadership(ctx context.Context, db DBTX, arg *ResignLeadershipParams) error {
-	_, err := db.Exec(ctx, resignLeadership, arg.Name, arg.Leaderid)
+	_, err := db.Exec(ctx, resignLeadership, arg.Leaseduration, arg.Name, arg.Leaderid)
 	return err
 }

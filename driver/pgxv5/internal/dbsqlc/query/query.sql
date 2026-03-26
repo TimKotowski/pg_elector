@@ -5,7 +5,8 @@ ON CONFLICT (name) DO UPDATE
 SET elected_at = NOW(),
     expires_at = NOW() + MAKE_INTERVAL(secs => @leaseDuration),
     renewed_at = NOW(),
-    leader_id = @leaderId
+    leader_id = @leaderId,
+    term = leaders.term + 1
 WHERE expires_at < NOW() AND name = @name
 RETURNING *;
 
@@ -13,14 +14,10 @@ RETURNING *;
 UPDATE leaders
 SET renewed_at = NOW(),
     expires_at = NOW() + MAKE_INTERVAL(secs => @leaseDuration)
-WHERE name = @name AND leader_id = @leaderId and expires_at >= NOW()
+WHERE name = @name AND leader_id = @leaderId and expires_at >= NOW() and term = @term
 RETURNING *;
-
--- name: ReleaseLeadership :exec
-DELETE FROM leaders
-WHERE name = @name AND leader_id = @leaderId;
 
 -- name: ResignLeadership :exec
 UPDATE leaders
-SET expires_at = NOW() - MAKE_INTERVAL(secs => 1))
+SET expires_at = '-infinity'
 WHERE name = @name AND leader_id = @leaderId;

@@ -3,7 +3,7 @@ package pg_elector
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -14,68 +14,80 @@ var ErrRevokedLeader = errors.New("leadership was revoked")
 var ErrDeadlineReached = errors.New("leader deadline duration reached, unable to successfully renew lease")
 
 type Elector struct {
-	ctx context.Context
-
-	nodeId string
-
-	driver driver.Driver
-
-	clock Clock
-
-	config *Config
-
-	mutex sync.Mutex
-
-	contextWatcher *ContextWatcher
-
-	maxRenewalErrAttempts int
-
-	leaderCallbackContextWatcher *ContextWatcher
-
-	leader *driver.Leader
+	nodeId          string
+	ctx             context.Context
+	driver          driver.Driver
+	clock           Clock
+	logger          *slog.Logger
+	maxErrAttempts  int
+	contextWatcher  *ContextWatcher
+	electionClock   ElectionClock
+	releaseOnCancel bool
+	name            string
+	leaderCallback  *LeaderCallback
+	leader          *driver.Leader
+	mutex           sync.Mutex
+	stop            chan struct{}
 }
 
-func NewLeaderElector(ctx context.Context, d driver.Driver, config *Config) (*Elector, error) {
+type ElectedLeader struct {
+	Name     string
+	LeaderID string
+	Term     int64
+}
+
+func NewLeaderElector(ctx context.Context, drv driver.Driver, config *Config) (*Elector, error) {
 	nodeId, err := getNodeId()
 	if err != nil {
 		return nil, err
 	}
 
-	if d == nil {
+	if drv == nil {
 		return nil, errors.New("database driver was uninitialized")
 	}
+
 	if config == nil {
 		return nil, errors.New("config cannot be nil")
 	}
 
 	config = config.WithDefaults()
 
-	validLogicalClock := config.ElectionClock.LeaderRetryPeriod < config.ElectionClock.LeaderDeadline &&
-		config.ElectionClock.LeaderDeadline < config.ElectionClock.ElectionInterval
-
-	if !validLogicalClock {
-		return nil, errors.New("election clock is not valid sequence of comparators")
+	if err := config.validate(); err != nil {
+		return nil, err
 	}
 
+	logger := config.Logger
+	logger = logger.With(
+		slog.String("component", "elector"),
+		slog.String("nodeId", nodeId),
+		slog.String("election", config.Name),
+	)
+
 	handler := func() {
-		err := d.GetQuerier().ReleaseLeadership(context.Background(), driver.BasePrams{
+		logger.Info("hitting handler")
+		if err := drv.GetQuerier().ResignLeadership(context.Background(), driver.BasePrams{
 			Name:     config.Name,
 			LeaderId: nodeId,
-		})
-		if err != nil {
-			log.Println("unable to release leadership", err)
+		}); err != nil {
+			logger.Warn("release on cancel context was called, where best-effort leader resign failed",
+				"error", err.Error(),
+			)
 		}
 	}
 
 	elector := &Elector{
-		ctx:                   ctx,
-		nodeId:                nodeId,
-		driver:                d,
-		clock:                 NewClock(),
-		config:                config,
-		mutex:                 sync.Mutex{},
-		maxRenewalErrAttempts: 5,
-		leader:                nil,
+		ctx:             ctx,
+		nodeId:          nodeId,
+		driver:          drv,
+		clock:           NewClock(),
+		electionClock:   config.ElectionClock,
+		releaseOnCancel: config.ReleaseOnCancel,
+		name:            config.Name,
+		leaderCallback:  config.LeaderCallback,
+		logger:          logger,
+		mutex:           sync.Mutex{},
+		maxErrAttempts:  5,
+		stop:            make(chan struct{}),
 	}
 
 	if config.ReleaseOnCancel {
@@ -85,24 +97,40 @@ func NewLeaderElector(ctx context.Context, d driver.Driver, config *Config) (*El
 	return elector, nil
 }
 
-func (e *Elector) Start(ctx context.Context) error {
-	if e.config.ReleaseOnCancel {
+func (e *Elector) Start(ctx context.Context) {
+	if e.releaseOnCancel {
 		e.contextWatcher.Watch()
 	}
-	var attempts int
+
+	go e.runElectorLoop(ctx)
+}
+
+func (e *Elector) Stop() {
+	<-e.stop
+}
+
+func (e *Elector) runElectorLoop(ctx context.Context) {
+	var errorCount int
 	electionTimer := time.NewTimer(0)
+
+	defer close(e.stop)
 	for {
-		leader, err := e.driver.GetQuerier().AcquireLeadership(context.Background(), driver.AcquireLeadershipParams{
+		leader, err := e.driver.GetQuerier().AcquireLeadership(ctx, driver.AcquireLeadershipParams{
 			BasePrams: driver.BasePrams{
-				Name:     e.config.Name,
+				Name:     e.name,
 				LeaderId: e.nodeId,
 			},
-			LeaseDurationSeconds: e.config.ElectionClock.LeaseDuration.Seconds(),
+			LeaseDurationSeconds: e.electionClock.LeaseDuration.Seconds(),
 		})
 		if err != nil {
-			attempts++
-			WaitBlocking(ctx, attempts)
+			errorCount++
+			if errorCount >= e.maxErrAttempts {
+				return
+			}
+			WaitCancelableBlocking(ctx, errorCount, JitterMin, JitterMax)
 			continue
+		} else {
+			errorCount = 0
 		}
 
 		if leader != nil {
@@ -110,67 +138,55 @@ func (e *Elector) Start(ctx context.Context) error {
 			e.leader = leader
 			e.mutex.Unlock()
 
-			if err := e.runBlockingLeadershipLoop(ctx); errors.Is(err, context.Canceled) {
-				return err
+			if err := e.maintainLeadership(ctx); err != nil {
+				if errors.Is(err, context.Canceled) {
+					return
+				}
+				e.logger.ErrorContext(ctx, "Failed to maintain leadership", "error", err)
 			}
 		}
 
-		attempts = 0
-		jitter := JitterDuration(e.config.ElectionClock.ElectionJitterInterval)
-		electionTimer.Reset(e.config.ElectionClock.ElectionInterval + jitter)
+		// For elections, use a fixed base + jitter
+		jitter := applyJitter(e.electionClock.ElectionJitterInterval, JitterMin, JitterMax)
+		electionTimer.Reset(e.electionClock.ElectionInterval + jitter)
+
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return
 		case <-electionTimer.C:
 		}
 	}
 }
 
-func (e *Elector) isLeader() bool {
-	e.mutex.Lock()
-	defer e.mutex.Unlock()
-
-	if e.leader == nil {
-		return false
-	}
-
-	now := e.clock.NowUTC()
-	if e.leader.RenewedAt.Time.Add(e.config.ElectionClock.LeaderDeadline).Before(now) {
-		return false
-	}
-
-	return true
-}
-
-func (e *Elector) isFollower() bool {
-	e.mutex.Lock()
-	defer e.mutex.Unlock()
-
-	return e.leader == nil
-}
-
-func (e *Elector) runBlockingLeadershipLoop(ctx context.Context) error {
-	renewalTimer := time.NewTicker(e.config.ElectionClock.LeaderRetryPeriod)
-
+func (e *Elector) maintainLeadership(ctx context.Context) error {
 	lCtx, leaderCancel := context.WithCancel(ctx)
-	go e.config.LeaderCallback.OnStartedLeading(lCtx)
-	go e.config.LeaderCallback.OnNewLeader(e.nodeId)
+	go e.leaderCallback.OnStartedLeading(lCtx, &ElectedLeader{
+		LeaderID: e.nodeId,
+		Name:     e.name,
+		Term:     e.leader.Term,
+	})
+	go e.leaderCallback.OnNewLeader(e.nodeId)
 
-	e.leaderCallbackContextWatcher = NewContextWatcher(
-		func() {
-			e.config.LeaderCallback.OnStoppedLeading()
-		}, lCtx)
+	stepdownLeadership := func() error {
+		leaderCancel()
+		err := e.driver.GetQuerier().ResignLeadership(ctx, driver.BasePrams{
+			Name:     e.name,
+			LeaderId: e.nodeId,
+		})
 
-	go e.leaderCallbackContextWatcher.Watch()
+		return err
+	}
 
-	var attempts int
+	var errorCount int
+	renewalTimer := time.NewTicker(e.electionClock.LeaderRetryPeriod)
+	deadlineTimer := time.NewTimer(e.electionClock.LeaderDeadline)
+
+	defer e.leaderCallback.OnStoppedLeading()
 	for {
 		select {
 		case <-renewalTimer.C:
-			attempts++
 			err := e.tryRenewLeadership(ctx, func() bool {
-				now := e.clock.NowUTC()
-				hasRenewDeadlineExpired := e.leader.RenewedAt.Time.Add(e.config.ElectionClock.LeaderDeadline).Before(now)
+				hasRenewDeadlineExpired := e.leader.RenewedAt.Add(e.electionClock.LeaderDeadline).Before(e.clock.NowUTC())
 				if hasRenewDeadlineExpired {
 					return true
 				}
@@ -178,39 +194,39 @@ func (e *Elector) runBlockingLeadershipLoop(ctx context.Context) error {
 			})
 
 			if err != nil {
+				errorCount++
 				if errors.Is(err, ErrRevokedLeader) || errors.Is(err, ErrDeadlineReached) {
-					e.revokeInternalStateLeadership()
-					leaderCancel()
-					<-e.leaderCallbackContextWatcher.Release()
-					_ = e.driver.GetQuerier().ResignLeadership(ctx, driver.BasePrams{
-						Name:     e.config.Name,
-						LeaderId: e.nodeId,
-					})
+					resignErr := stepdownLeadership()
+					if resignErr != nil {
+						e.logger.ErrorContext(ctx, "Failed to Resign Leadership", "error", err)
+					}
 					return err
 				}
 
-				if attempts > e.maxRenewalErrAttempts {
-					e.revokeInternalStateLeadership()
-					leaderCancel()
-					<-e.leaderCallbackContextWatcher.Release()
-					_ = e.driver.GetQuerier().ResignLeadership(ctx, driver.BasePrams{
-						Name:     e.config.Name,
-						LeaderId: e.nodeId,
-					})
+				if errorCount >= e.maxErrAttempts {
+					resignErr := stepdownLeadership()
+					if resignErr != nil {
+						e.logger.ErrorContext(ctx, "Failed to Resign Leadership", "error", err)
+					}
 					return err
 				}
 			} else {
-				attempts = 0
+				deadlineTimer.Reset(e.electionClock.LeaderDeadline)
+				errorCount = 0
 			}
 
-		case <-ctx.Done():
-			// First: Release any work that may be happening on the leader.
-			e.revokeInternalStateLeadership()
-			leaderCancel()
-			<-e.leaderCallbackContextWatcher.Release()
+		case <-deadlineTimer.C:
+			err := stepdownLeadership()
+			if err != nil {
+				e.logger.ErrorContext(ctx, "Failed to Resign Leadership", "error", err)
+			}
+			return nil
 
+		case <-ctx.Done():
+			// First: Send cancel signal on the leader.
+			leaderCancel()
 			// Second: Release leadership immediately, so followers can fore-acquire.
-			if e.config.ReleaseOnCancel {
+			if e.releaseOnCancel {
 				<-e.contextWatcher.Release()
 			}
 			return ctx.Err()
@@ -218,15 +234,8 @@ func (e *Elector) runBlockingLeadershipLoop(ctx context.Context) error {
 	}
 }
 
-func (e *Elector) revokeInternalStateLeadership() {
-	e.mutex.Lock()
-	defer e.mutex.Unlock()
-	e.leader = nil
-}
-
 func (e *Elector) tryRenewLeadership(ctx context.Context, hasLeaderDeadlineBeenReached func() bool) error {
-	// Avoid separate timers for LeaderDeadline to keep the logic simple and deterministic.
-	// With timer for LeaderDeadlineTimer and RenewTimer the goroutine scheduling order can be non deterministic.
+	// With timer for LeaderDeadlineTimer and RenewTimer the goroutine scheduling order can be non-deterministic.
 	// The Go runtime does not guarantee if renew timer or deadline timer if both concurrently firing timers, will have its goroutine
 	// scheduled first, which could allow the renewal timer to execute before the deadline timer, when both have elapsed.
 	// And depending on the LeaseDuration that was set (non default used), could habe a rather tight TTL,
@@ -235,17 +244,16 @@ func (e *Elector) tryRenewLeadership(ctx context.Context, hasLeaderDeadlineBeenR
 		return ErrDeadlineReached
 	}
 
-	ctxTimeout, cancel := context.WithTimeout(ctx, e.config.ElectionClock.LeaderDeadline)
+	ctxTimeout, cancel := context.WithTimeout(ctx, e.electionClock.LeaderDeadline)
 	acquiredLeaderRenewal, err := e.driver.GetQuerier().LeaderRenewal(ctxTimeout, driver.LeaderRenewalParams{
 		BasePrams: driver.BasePrams{
-			Name:     e.config.Name,
+			Name:     e.name,
 			LeaderId: e.nodeId,
 		},
-		LeseDuration: e.config.ElectionClock.LeaseDuration.Seconds(),
+		LeseDuration: e.electionClock.LeaseDuration.Seconds(),
 	})
 	cancel()
 
-	// This should never happen. But used as a safeguard.
 	if err == nil && acquiredLeaderRenewal == nil {
 		return ErrRevokedLeader
 	}

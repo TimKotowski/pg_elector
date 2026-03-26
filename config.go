@@ -3,41 +3,42 @@ package pg_elector
 import (
 	"cmp"
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"time"
 )
 
+type LeaderTask = func(ctx context.Context, leader *ElectedLeader)
+
 type Config struct {
-	LeaderCallback LeaderCallback
-	// ElectionClock configures timing for leader election.
+	// LeaderCallback configures the callbacks of tasks for leader.
+	LeaderCallback *LeaderCallback
+	// ElectionClock configures clocks for leader election and leader life cycle.
 
-	// Timing Constraints:
-	// 	LeaderRetryPeriod <  LeaderDeadline < ElectionInterval
-	// If none of these are met, defaults will be chosen.
+	// Clock Constraints:
+	// 		LeaderRetryPeriod < LeaderDeadline < ElectionInterval < LeaseDuration
 
-	// ElectionInterval should be at least 2x the LeaderDeadline. LeaderDeadline should allow for multiple
-	// LeaderRetryPeriod attempts, at least 3x to 5x.
-
-	// ElectionClock The leader must retry faster than its deadline.
-	// And followers must wait longer than the leaders' deadline before attempting to force acquire leadership.
-	// Otherwise, followers will compete for leadership while the current didn't have a full life cycle to continue leadership.
-
-	// ElectionInterval will always run no matter what, but logical clock is used in code to ensure a leader has the right
-	// leadership lifecycle given before election interval takes place, to ensure a more fair leadership.
+	// ElectionInterval should be at least 1-2x the LeaderDeadline.
+	// LeaderDeadline should allow for multiple LeaderRetryPeriod attempts, at least 3x to 5x. The leader must retry faster than its deadline.
+	// LeaseDuration should be 1x or more of ElectionInterval for proper leader life cycles.
+	// Tighter LeaserDuration is allowed, if needed.
+	// Be aware, if ReleaseOnCancel is set to false, LeaseDuration will be held by released leader, till LeaserDuration has elapsed.
+	// This would be a potentially long duration of no leader activity.
 	ElectionClock ElectionClock
 
 	// Identifies which leadership group this node is competing in.
 	// Defaults to "default".
 	Name string
 
-	// ReleaseOnCancel set to true if on cancel of context, the leaderships lock should be released immediately.
+	// ReleaseOnCancel set to true if on cancel of context, the leaderships lease should be released immediately.
 	// You must ensure though, that all code actions are handled before wanting to cancel leadership immediately.
-	// Once released, the elector process will gracefully shut down.
 
-	// ReleaseOnCancel set to false, if on cancel of context. Will let the leadership expire naturally before gracefully shutting down.
+	// ReleaseOnCancel set to false, if on cancel of context. Will let the leadership expire naturally.
+	// Be aware, if ReleaseOnCancel is set to default false, LeaseDuration will be held by released leader, till LeaserDuration has elapsed.
+	// This would be a potentially long duration of no leader activity.
 
-	// Defaults to true.
+	// Defaults to false.
 	ReleaseOnCancel bool
 
 	Logger *slog.Logger
@@ -76,10 +77,21 @@ type ElectionClock struct {
 	LeaseDuration time.Duration
 }
 
+// LeaderCallback configures the callbacks of tasks for leader.
 type LeaderCallback struct {
-	OnStartedLeading func(ctx context.Context)
+	// OnStartedLeading configures the callback on leader to allow tasks to start.
+	// A context and leader object is provided.
+
+	// Context allows to side step stale leaders more safely, and allow the stale leader to clean up work, or notify work to stop.
+
+	// Leader object is provided with info about the elected leader as a token fencing mechanism.
+	// This goes a long way toward a strong single leader safety. It can prevent a stale acting leader from causing any damage.
+	// Every time a new leader is elected, the leader includes a monotonically increasing term.
+	OnStartedLeading LeaderTask
+
 	OnStoppedLeading func()
-	OnNewLeader      func(nodeId string)
+
+	OnNewLeader func(nodeId string)
 }
 
 type ConfigFunc func(c *Config)
@@ -94,6 +106,7 @@ func (c *Config) WithDefaults() *Config {
 			Level: slog.LevelWarn,
 		}))
 	}
+	slog.SetDefault(c.Logger)
 
 	return &Config{
 		Name:           cmp.Or(c.Name, "default"),
@@ -135,4 +148,30 @@ func WithReleaseOnCancel(releaseOnCancel bool) ConfigFunc {
 	return func(c *Config) {
 		c.ReleaseOnCancel = releaseOnCancel
 	}
+}
+
+func (c *Config) validate() error {
+	if c.LeaderCallback == nil {
+		return errors.New("leader callbacks cannot be nil")
+	}
+
+	if c.LeaderCallback.OnStartedLeading == nil {
+		return errors.New("leader callbacks cannot be nil")
+	}
+	if c.LeaderCallback.OnStartedLeading == nil {
+		return errors.New("leader callbacks cannot be nil")
+	}
+	if c.LeaderCallback.OnNewLeader == nil {
+		return errors.New("leader callbacks cannot be nil")
+	}
+
+	validElectoralClock := c.ElectionClock.LeaderRetryPeriod < c.ElectionClock.LeaderDeadline &&
+		c.ElectionClock.LeaderDeadline < c.ElectionClock.ElectionInterval &&
+		c.ElectionClock.ElectionInterval < c.ElectionClock.LeaseDuration
+
+	if !validElectoralClock {
+		return errors.New("incorrect electoral clock configuration")
+	}
+
+	return nil
 }

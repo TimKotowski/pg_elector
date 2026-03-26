@@ -7,14 +7,15 @@
 //
 
 // Package mockDriver is a generated GoMock package.
-package mockDriver
+package mocks
 
 import (
-	context "context"
-	reflect "reflect"
+	"context"
+	"reflect"
 
-	driver "github.com/TimKotowski/pg_elector/driver"
-	gomock "go.uber.org/mock/gomock"
+	"go.uber.org/mock/gomock"
+
+	"github.com/TimKotowski/pg_elector/driver"
 )
 
 // MockDriver is a mock of Driver interface.
