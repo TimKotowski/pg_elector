@@ -62,4 +62,3 @@ With term enforcement at the resource layer, a stale leader's writes are rejecte
 | Full process freeze < LeaseDuration | Yes |
 | Full process freeze > LeaseDuration | Yes, **if** term is enforced at the resource layer |
 
-Without term enforcement, pg_elector provides a strong single-leader guarantee that covers all realistic operating conditions. With term enforcement, the guarantee is absolute
