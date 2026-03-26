@@ -10,7 +10,7 @@ The election clock enforces an invariant where the leader **always steps down be
 
 ### How it works
 
-Each leader holds a lease with an `expires_at` timestamp. The leader periodically renews this lease. If renewal fails, a local deadline timer or harder checks other than deadline timer, ensures the leader resigns and cancels **before** the database lease expires. Extra steps are taken to ensure deadline timers is priority. For example, the Go runtime does not always guarantee that the renew timer (heartbeat to renew lease at short intervals) or deadline timer if both concurrently firing timers, will have its goroutine scheduled first. Check are done all all sides, for these contingencies, preserving a safe gap.
+Each leader holds a lease with an `expires_at` timestamp. The leader periodically renews this lease. If renewal fails, a local deadline timer or harder checks other than deadline timer, ensures the leader resigns and cancels **before** the database lease expires. Extra steps are taken to ensure deadline timers is priority. For example, the Go runtime does not always guarantee that the renew timer (heartbeat to renew lease at short intervals) or deadline timer if both concurrently firing timers, will have its goroutine scheduled first. Check are done on all sides, for this contingency, preserving a safe gap.
 
 ```
 LeaderRetryPeriod < LeaderDeadline < LeaseDuration < ElectionInterval
