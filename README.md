@@ -2,6 +2,9 @@
 
 A Postgres based leader election library for Go. Using pure MVCC and lease expiration to coordinate leadership, no external consensus system required.
 
+## Documentation
+🚧 Documentation is a work-in-progress. 🚧
+
 ## Leadership guarantee
 
 pg_elector provides a **strong single-leader guarantee** through lease-based election with Postgres as the source of truth.
@@ -46,7 +49,7 @@ The term increments atomically on every leadership change. It never decreases, n
 To achieve a **mathematically guaranteed single-leader** system, pass the term with every write to your downstream resources and have those resources reject any write carrying a term lower than the highest they have seen:
 
 ```go
-Work In progress fencing client calls.
+🚧  Work In progress fencing client calls.🚧 
 ```
 
 With term enforcement at the resource layer, a stale leader's writes are rejected regardless of timing, freezes, or detection lag. The context cancellation handles the common case fast; the term handles the edge case correctly.
